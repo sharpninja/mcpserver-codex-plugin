@@ -1,0 +1,3 @@
+cache/pending/*.yaml
+cache/session-state.yaml
+cache/plan-todo-map.yaml

@@ -1,0 +1,77 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate manifests
+        run: |
+          python3 -c "import json; json.load(open('.codex-plugin/plugin.json'))" && echo ".codex-plugin/plugin.json OK"
+          python3 -c "import json; json.load(open('.agents/plugins/marketplace.json'))" && echo "marketplace.json OK"
+
+      - name: Validate skill frontmatter
+        run: |
+          for skill_file in skills/*/SKILL.md; do
+            echo "Checking ${skill_file}..."
+            # Verify no 'version:' in frontmatter (Codex only allows name + description)
+            head -5 "${skill_file}" | grep -v '^version:' > /dev/null || \
+              { echo "ERROR: ${skill_file} has version field in frontmatter"; exit 1; }
+            # Verify name field present
+            grep -q '^name:' "${skill_file}" || { echo "ERROR: missing name in ${skill_file}"; exit 1; }
+            # Verify description field present
+            grep -q '^description:' "${skill_file}" || { echo "ERROR: missing description in ${skill_file}"; exit 1; }
+          done
+          echo "All skill files valid"
+
+      - name: Validate shell scripts
+        run: |
+          bash -n lib/marker-resolver.sh
+          bash -n lib/repl-invoke.sh
+          bash -n lib/cache-manager.sh
+          bash -n lib/ensure-repl.sh
+          bash -n setup.sh
+          echo "All scripts pass syntax check"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: McpServer Codex CLI Plugin ${{ github.ref_name }}
+          body: |
+            ## McpServer OpenAI Codex CLI Plugin ${{ github.ref_name }}
+
+            Provides TODO management, session logging, requirements tracking, and GraphRAG knowledge graph for OpenAI Codex CLI.
+
+            ### Installation
+
+            1. Reference this repo in your `.agents/plugins/marketplace.json`:
+               ```json
+               {
+                 "plugins": [
+                   {
+                     "name": "mcpserver",
+                     "path": "https://github.com/sharpninja/mcpserver-codex-plugin/archive/refs/tags/${{ github.ref_name }}.tar.gz"
+                   }
+                 ]
+               }
+               ```
+            2. Run `./setup.sh` to install `mcpserver-repl`
+            3. Run `codex --plugin .` to activate
+
+            ### Prerequisites
+            - OpenAI Codex CLI
+            - McpServer running with `AGENTS-README-FIRST.yaml` marker file
+            - .NET 9.0 SDK (for `mcpserver-repl`)
+          files: |
+            .codex-plugin/plugin.json
+            .agents/plugins/marketplace.json

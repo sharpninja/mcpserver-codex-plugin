@@ -1,0 +1,15 @@
+{
+  "plugins": [
+    {
+      "name": "mcpserver",
+      "version": "1.0.0",
+      "description": "McpServer workflow tools: TODO management, session logging, requirements tracking, and GraphRAG knowledge graph",
+      "path": ".",
+      "manifest": ".codex-plugin/plugin.json",
+      "author": "Payton Byrd (The Sharp Ninja)",
+      "repository": "https://github.com/sharpninja/mcpserver-codex-plugin",
+      "license": "MIT",
+      "keywords": ["mcp", "todo", "session-log", "requirements", "graphrag"]
+    }
+  ]
+}
