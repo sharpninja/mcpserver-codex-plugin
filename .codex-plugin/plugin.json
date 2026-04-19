@@ -1,7 +1,7 @@
 {
   "name": "mcpserver",
-  "version": "1.0.0",
-  "description": "Connect OpenAI Codex CLI to McpServer for TODO management, session logging, requirements tracking, and GraphRAG knowledge graph operations.",
+  "version": "1.1.0",
+  "description": "Connect OpenAI Codex CLI to McpServer for TODO management, session logging, requirements tracking, GraphRAG knowledge graph operations, and per-turn + build-verification enforcement scripts.",
   "author": {
     "name": "Payton Byrd (The Sharp Ninja)",
     "developerName": "sharpninja"
