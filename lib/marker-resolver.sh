@@ -36,9 +36,9 @@ parse_marker_field() {
     local marker_file="$1"
     local field_name="$2"
 
-    # Try top-level field first
+    # Try top-level field first. `tr -d '\r'` strips CR for CRLF marker files.
     local value
-    value=$(grep "^${field_name}:" "$marker_file" 2>/dev/null | head -1 | sed "s/^${field_name}:[[:space:]]*//" | sed 's/^"\(.*\)"$/\1/' | sed "s/^'\(.*\)'$/\1/")
+    value=$(grep "^${field_name}:" "$marker_file" 2>/dev/null | head -1 | tr -d '\r' | sed "s/^${field_name}:[[:space:]]*//" | sed 's/^"\(.*\)"$/\1/' | sed "s/^'\(.*\)'$/\1/")
 
     if [ -n "$value" ]; then
         echo "$value"
@@ -49,6 +49,7 @@ parse_marker_field() {
     value=$(sed -n '/^endpoints:/,/^[^ ]/p' "$marker_file" 2>/dev/null \
         | grep "^[[:space:]]*${field_name}:" \
         | head -1 \
+        | tr -d '\r' \
         | sed "s/^[[:space:]]*${field_name}:[[:space:]]*//" \
         | sed 's/^"\(.*\)"$/\1/' \
         | sed "s/^'\(.*\)'$/\1/")
@@ -80,20 +81,22 @@ verify_signature() {
 
     # Build canonical payload (marker-v1 format)
     local payload=""
-    payload+="canonicalization=marker-v1\n"
-    payload+="port=${port}\n"
-    payload+="baseUrl=${base_url}\n"
-    payload+="apiKey=${api_key}\n"
-    payload+="workspace=${workspace}\n"
-    payload+="workspacePath=${workspace_path}\n"
-    payload+="pid=${pid}\n"
-    payload+="startedAt=${started_at}\n"
-    payload+="markerWrittenAtUtc=${marker_written}\n"
-    payload+="serverStartedAtUtc=${server_started}\n"
+    payload+="canonicalization=marker-v1"$'\n'
+    payload+="port=${port}"$'\n'
+    payload+="baseUrl=${base_url}"$'\n'
+    payload+="apiKey=${api_key}"$'\n'
+    payload+="workspace=${workspace}"$'\n'
+    payload+="workspacePath=${workspace_path}"$'\n'
+    payload+="pid=${pid}"$'\n'
+    payload+="startedAt=${started_at}"$'\n'
+    payload+="markerWrittenAtUtc=${marker_written}"$'\n'
+    payload+="serverStartedAtUtc=${server_started}"$'\n'
 
-    # Extract endpoints section and build payload lines
+    # Extract endpoints section and build payload lines.
+    # Strip CR before matching so CRLF marker files parse correctly.
     local in_endpoints=false
     while IFS= read -r line; do
+        line="${line%$'\r'}"
         if [[ "$line" =~ ^endpoints: ]]; then
             in_endpoints=true
             continue
@@ -107,7 +110,7 @@ verify_signature() {
             # Trim whitespace
             key=$(echo "$key" | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
             val=$(echo "$val" | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
-            payload+="endpoints.${key}=${val}\n"
+            payload+="endpoints.${key}=${val}"$'\n'
         fi
     done < "$marker_file"
 
@@ -124,6 +127,9 @@ verify_signature() {
         fi
         if $in_signature && [[ "$line" =~ ^[[:space:]]+value:[[:space:]]*(.*) ]]; then
             stored_signature="${BASH_REMATCH[1]}"
+            # Strip trailing CR (CRLF marker files) and whitespace
+            stored_signature="${stored_signature%$'\r'}"
+            stored_signature="${stored_signature%%[[:space:]]}"
         fi
     done < "$marker_file"
 
