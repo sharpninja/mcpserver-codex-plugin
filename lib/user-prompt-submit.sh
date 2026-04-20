@@ -88,9 +88,12 @@ codeEdits: 0
 lastBuildStatus: unknown
 EOF
 
-# Inject a per-turn reminder into Claude's context so the agent sees the
-# exact contract that applies to this turn.
-REMINDER="session log turn ${TURN_REQUEST_ID} is now active. Before you finalize this response you MUST: (1) append actions via workflow.sessionlog.appendActions for every file written/edited, (2) call workflow.sessionlog.completeTurn with a response summary. The Stop hook will block your response otherwise."
+# Inject a per-turn reminder into the agent's context so it sees the
+# exact contract that applies to this turn. The stop-gate hook auto-closes
+# the turn via the plugin's own repl-invoke.sh shim — the agent is NOT
+# expected to invoke workflow.sessionlog.* (those verbs are not exposed as
+# MCP tools).
+REMINDER="session log turn ${TURN_REQUEST_ID} is now active. The stop-gate hook will auto-close the turn on finalize. PostToolUse/Write|Edit hooks auto-log actions. If you want richer action metadata, POST /mcpserver/sessionlog directly with the workspace API key from AGENTS-README-FIRST.yaml."
 
 printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","status":"turn-opened","turnRequestId":"%s","additionalContext":"%s"}}\n' \
     "$TURN_REQUEST_ID" \

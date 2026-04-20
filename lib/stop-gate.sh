@@ -43,10 +43,25 @@ CODE_EDITS="$(grep '^codeEdits:' "$TURN_FILE" 2>/dev/null | head -1 | sed 's/^co
 CODE_EDITS="${CODE_EDITS:-0}"
 
 # Gate 1 — turn not completed.
+# Self-heal: agents may not be able to reach workflow.sessionlog.* (not
+# registered in the MCP tool surface); auto-complete the turn here so Stop
+# is not wedged. Fall through to the explicit block only if self-heal fails.
 if [ "$TURN_STATUS" = "in_progress" ]; then
-    REASON="Session log turn ${TURN_ID} is still in_progress. Call workflow.sessionlog.appendActions for every file you wrote/edited, then workflow.sessionlog.completeTurn with a response summary before finalizing."
-    printf '{"decision":"block","reason":"%s"}\n' "$REASON"
-    exit 0
+    if [ -f "$CODEX_PLUGIN_ROOT/lib/repl-invoke.sh" ]; then
+        # shellcheck source=./repl-invoke.sh
+        source "$CODEX_PLUGIN_ROOT/lib/repl-invoke.sh" 2>/dev/null || true
+    fi
+    if type _repl_workflow_complete_turn >/dev/null 2>&1; then
+        AUTO_PARAMS="response: |
+    Auto-closed by stop-gate.sh (turn self-heal). The agent could not invoke workflow.sessionlog.* directly; the hook now finalizes the turn when the response finishes."
+        _repl_workflow_complete_turn "$AUTO_PARAMS" >/dev/null 2>&1 || true
+        TURN_STATUS="$(grep '^status:' "$TURN_FILE" 2>/dev/null | head -1 | sed 's/^status:[[:space:]]*//')"
+    fi
+    if [ "$TURN_STATUS" = "in_progress" ]; then
+        REASON="Session log turn ${TURN_ID} could not be auto-closed. Check plugin/lib/repl-invoke.sh or MCP server availability."
+        printf '{"decision":"block","reason":"%s"}\n' "$REASON"
+        exit 0
+    fi
 fi
 
 # Gate 2 — build broken after a code edit.
