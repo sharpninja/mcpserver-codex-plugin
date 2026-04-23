@@ -4,6 +4,12 @@ description: This skill should be used when the user asks to "create a todo", "l
 ---
 ## Initialization (Codex)
 
+All `workflow.todo.*` examples in this skill are intended for
+`lib/repl-invoke.sh`, which translates supported calls to the real `client.*`
+methods exposed by `mcpserver-repl`. The current wrapper supports CRUD,
+querying, requirements analysis, and selected-TODO state; the streaming prompt
+verbs described later are not exposed in this Codex wrapper.
+
 Before using any workflow commands, call `workflow.sessionlog.bootstrap` to initialize the session log subsystem:
 
 ```yaml
@@ -21,7 +27,10 @@ This is idempotent and should be called once per conversation context.
 
 ## Overview
 
-To interact with project TODOs, use the `workflow.todo.*` REPL command namespace via `mcpserver-repl --agent-stdio`. All commands follow the standard YAML envelope protocol: send a `type: request` envelope on stdin, receive a `type: result` or `type: error` envelope on stdout. Streaming commands additionally emit a sequence of `type: event` envelopes before the final result.
+To interact with project TODOs, use the `workflow.todo.*` namespace through
+`lib/repl-invoke.sh`. All commands follow the standard YAML envelope protocol:
+send a `type: request` envelope on stdin, receive a `type: result` or
+`type: error` envelope on stdout.
 
 ## TODO ID Naming Conventions
 
@@ -207,6 +216,10 @@ payload:
 
 ## Streaming Status Analysis
 
+This streaming verb is not currently exposed by the Codex wrapper. Use
+`workflow.todo.get`, `workflow.todo.query`, and `workflow.todo.analyzeRequirements`
+instead.
+
 To request an AI-driven status analysis of a TODO, showing blockers and dependency state:
 
 ```yaml
@@ -246,6 +259,8 @@ payload:
 
 ## Streaming Plan Generation
 
+This streaming verb is not currently exposed by the Codex wrapper.
+
 To generate an implementation plan for a TODO and stream the result:
 
 ```yaml
@@ -260,6 +275,8 @@ payload:
 Events follow the same `eventType: plan.progress` / `eventType: plan.complete` pattern as status streaming. The completion event includes a structured plan document.
 
 ## Streaming Implementation Execution
+
+This streaming verb is not currently exposed by the Codex wrapper.
 
 To execute an AI-driven implementation run for a TODO and stream progress:
 

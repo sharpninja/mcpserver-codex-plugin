@@ -9,6 +9,10 @@ Codex CLI lacks a hook system, so the Per-User-Message protocol from
 `AGENTS-README-FIRST.yaml` must be invoked manually. This skill wraps that
 protocol in three scripts located in the plugin's `lib/` directory.
 
+Run `bash ${CODEX_PLUGIN_ROOT}/lib/session-start.sh <workspace-path>` once per
+workspace before Phase 1, or let `user-prompt-submit.sh` auto-bootstrap the
+session cache on first use.
+
 **Every user message MUST flow through these three phases.** If you skip any
 phase your session log is incomplete and the workspace's AGENTS-README-FIRST
 contract is violated.
@@ -22,6 +26,7 @@ echo '{"prompt":"<verbatim user message>"}' | bash ${CODEX_PLUGIN_ROOT}/lib/user
 ```
 
 The script:
+- Auto-bootstraps `cache/session-state.yaml` when the marker file is trusted
 - Reads `cache/session-state.yaml` for the active `sessionId`
 - Builds a fresh `requestId` of the form `req-<yyyyMMddTHHmmssZ>-prompt-xxxx`
 - Calls `workflow.sessionlog.beginTurn` with the prompt as `queryText`
@@ -46,8 +51,9 @@ echo '{"tool_name":"Edit","tool_input":{"file_path":"<absolute path>"}}' \
 The script:
 - Locates the nearest project file (`.csproj` / `package.json`)
 - Runs the matching build command (`dotnet build` or `tsc --noEmit`)
-- Parses the output, writes the status (`succeeded` / `failed`) to
-  `cache/current-turn.yaml` under `lastBuildStatus`, increments `codeEdits`
+- Parses the output and writes the status (`succeeded` / `failed`) to
+  `cache/current-turn.yaml` under `lastBuildStatus`
+- Records the code edit count via `workflow.sessionlog.appendActions`
 - Appends a `workflow.sessionlog.appendActions` entry
 - If the build failed, its stdout contains the first 10 errors; those
   errors are the reason you must fix the build before Phase 3

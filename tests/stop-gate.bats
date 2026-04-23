@@ -50,15 +50,18 @@ run_stop_gate() {
     echo "$out" | grep -qF '"status":"no-turn"'
 }
 
-@test "in_progress turn → decision:block" {
+@test "in_progress turn self-heals to passed when repl-invoke is available" {
     write_turn "in_progress"
     out="$(run_stop_gate)"
-    echo "$out" | grep -qF '"decision":"block"'
+    echo "$out" | grep -qF '"status":"passed"'
 }
 
-@test "in_progress block reason names turn id" {
+@test "in_progress turn blocks when repl-invoke cannot be loaded" {
     write_turn "in_progress"
+    export CODEX_PLUGIN_ROOT="$SANDBOX/missing-plugin-root"
     out="$(run_stop_gate)"
+    export CODEX_PLUGIN_ROOT="$PLUGIN_ROOT"
+    echo "$out" | grep -qF '"decision":"block"'
     echo "$out" | grep -qF "req-test-stop-001"
 }
 

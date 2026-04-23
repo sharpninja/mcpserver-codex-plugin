@@ -15,7 +15,7 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CODEX_PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
+CODEX_PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 CACHE_DIR="${PLUGIN_ROOT_OVERRIDE:-$CODEX_PLUGIN_ROOT}/cache"
 
 # Source libraries
@@ -39,7 +39,16 @@ extract_prompt() {
 
 USER_PROMPT="$(extract_prompt)"
 
-# If no MCP session established, short-circuit. Claude can still respond.
+# Bootstrap the local cache on demand so the wrapper is self-contained.
+if [ ! -f "$CACHE_DIR/session-state.yaml" ] || [ -z "$(grep '^sessionId:' "$CACHE_DIR/session-state.yaml" 2>/dev/null | head -1)" ]; then
+    if [ -f "$CODEX_PLUGIN_ROOT/lib/session-start.sh" ]; then
+        MCP_SESSION_AGENT="${MCP_SESSION_AGENT:-Codex}" \
+        MCP_SESSION_MODEL="${MCP_SESSION_MODEL:-codex}" \
+            bash "$CODEX_PLUGIN_ROOT/lib/session-start.sh" "$PWD" >/dev/null 2>&1 || true
+    fi
+fi
+
+# If no MCP session established, short-circuit. Codex can still respond.
 if [ ! -f "$CACHE_DIR/session-state.yaml" ]; then
     printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","status":"no-session"}}\n'
     exit 0
@@ -86,6 +95,8 @@ openedAt: $(date -u +%Y-%m-%dT%H:%M:%SZ)
 status: in_progress
 codeEdits: 0
 lastBuildStatus: unknown
+queryText: |
+${QUERY_TEXT_BLOCK}
 EOF
 
 # Inject a per-turn reminder into the agent's context so it sees the
@@ -93,7 +104,7 @@ EOF
 # the turn via the plugin's own repl-invoke.sh shim — the agent is NOT
 # expected to invoke workflow.sessionlog.* (those verbs are not exposed as
 # MCP tools).
-REMINDER="session log turn ${TURN_REQUEST_ID} is now active. The stop-gate hook will auto-close the turn on finalize. PostToolUse/Write|Edit hooks auto-log actions. If you want richer action metadata, POST /mcpserver/sessionlog directly with the workspace API key from AGENTS-README-FIRST.yaml."
+REMINDER="session log turn ${TURN_REQUEST_ID} is now active. Run code-verify.sh after each source edit and run stop-gate.sh before the final response. workflow.* methods should go through lib/repl-invoke.sh rather than directly to mcpserver-repl."
 
 printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","status":"turn-opened","turnRequestId":"%s","additionalContext":"%s"}}\n' \
     "$TURN_REQUEST_ID" \

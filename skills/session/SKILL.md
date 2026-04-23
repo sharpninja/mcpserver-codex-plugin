@@ -4,7 +4,13 @@ description: This skill should be used when the user asks to "start session", "l
 ---
 ## Initialization (Codex)
 
-Before using any workflow commands, call `workflow.sessionlog.bootstrap` to initialize the session log subsystem:
+All `workflow.sessionlog.*` examples in this skill are intended for
+`lib/repl-invoke.sh`, which translates them to the real `client.*` methods
+that `mcpserver-repl` exposes. For a one-shot bootstrap plus session open,
+prefer `bash ${CODEX_PLUGIN_ROOT}/lib/session-start.sh <workspace-path>`.
+
+Before using any workflow commands, call `workflow.sessionlog.bootstrap` through
+the wrapper to initialize the session log subsystem:
 
 ```yaml
 type: request
@@ -21,7 +27,9 @@ This is idempotent and should be called once per conversation context.
 
 ## Overview
 
-To manage agent session logs, use the `workflow.sessionlog.*` REPL command namespace via `mcpserver-repl --agent-stdio`. Session logging captures agent activity, reasoning dialog, file operations, and design decisions as a structured audit trail.
+To manage agent session logs, use the `workflow.sessionlog.*` namespace through
+`lib/repl-invoke.sh`. Session logging captures agent activity, reasoning
+dialog, file operations, and design decisions as a structured audit trail.
 
 Most session management is automated by the plugin hooks in `hooks/`. This skill covers manual operations, history queries, and the full lifecycle for agents that need direct control.
 

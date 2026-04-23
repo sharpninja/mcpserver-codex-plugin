@@ -4,7 +4,8 @@ description: This skill should be used when the user asks to "list requirements"
 ---
 ## Initialization (Codex)
 
-Before using any workflow commands, call `workflow.sessionlog.bootstrap` to initialize the session log subsystem:
+Call `workflow.sessionlog.bootstrap` through `lib/repl-invoke.sh` to initialize
+the session log subsystem before issuing any workflow commands:
 
 ```yaml
 type: request

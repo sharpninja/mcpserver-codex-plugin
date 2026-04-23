@@ -13,15 +13,15 @@ setup() {
     SANDBOX="$(mktemp -d)"
     mkdir -p "$SANDBOX/cache" "$SANDBOX/bin"
 
-    # Stub mcpserver-repl: emulates the real dispatcher — success for valid
-    # client.SessionLog.* methods, type:error for the workflow.* fictions
-    # so any future shim-removal regresses through THIS test.
+# Stub mcpserver-repl: emulates the real dispatcher — success for valid
+# client.* methods, type:error for the workflow.* fictions so any future
+# shim-removal regresses through THIS test.
     cat > "$SANDBOX/bin/mcpserver-repl" <<'STUB'
 #!/usr/bin/env bash
 input="$(cat)"
 method="$(printf '%s\n' "$input" | grep '^[[:space:]]*method:' | head -1 | sed 's/^[[:space:]]*method:[[:space:]]*//')"
 case "$method" in
-    client.SessionLog.SubmitAsync|client.SessionLog.QueryAsync)
+    client.SessionLog.SubmitAsync|client.SessionLog.QueryAsync|client.SessionLog.AppendDialogAsync|client.Todo.QueryAsync|client.Todo.UpdateAsync|client.Todo.GetAsync|client.Todo.GetByIdAsync)
         printf 'type: response\npayload:\n  ok: true\n'
         ;;
     workflow.sessionlog.*)
@@ -37,6 +37,11 @@ STUB
     cat > "$SANDBOX/cache/session-state.yaml" <<EOF
 status: verified
 sessionId: ClaudeCode-20260419T000000Z-test
+sourceType: ClaudeCode
+title: Shim test session
+model: codex
+started: 2026-04-19T00:00:00Z
+lastUpdated: 2026-04-19T00:00:00Z
 workspacePath: "/tmp/ws"
 workspace: "test"
 baseUrl: "http://localhost:1"
@@ -128,16 +133,34 @@ response: |
     [ "$(read_edits)" = "2" ]
 }
 
-@test "beginTurn shim is a no-op success" {
+@test "beginTurn creates current-turn.yaml when called directly" {
     source "$LIB"
-    run repl_invoke "workflow.sessionlog.beginTurn" "requestId: x"
+    rm -f "$SANDBOX/cache/current-turn.yaml"
+    run repl_invoke "workflow.sessionlog.beginTurn" "requestId: req-test-begin-001
+queryTitle: Direct begin
+queryText: |
+  Start work now."
     [ "$status" -eq 0 ]
+    grep -q '^turnRequestId: req-test-begin-001' "$SANDBOX/cache/current-turn.yaml"
+    grep -q '^status: in_progress' "$SANDBOX/cache/current-turn.yaml"
 }
 
-@test "openSession shim is a no-op success" {
+@test "openSession populates missing session metadata" {
     source "$LIB"
-    run repl_invoke "workflow.sessionlog.openSession" "agent: ClaudeCode"
+    cat > "$SANDBOX/cache/session-state.yaml" <<EOF
+status: verified
+workspacePath: "/tmp/ws"
+workspace: "test"
+baseUrl: "http://localhost:1"
+timestamp: "2026-04-19T00:00:00Z"
+EOF
+    run repl_invoke "workflow.sessionlog.openSession" "agent: Codex
+title: Fix the plugin
+model: gpt-5.4"
     [ "$status" -eq 0 ]
+    grep -q '^sessionId: Codex-' "$SANDBOX/cache/session-state.yaml"
+    grep -q '^sourceType: Codex' "$SANDBOX/cache/session-state.yaml"
+    grep -q '^title: Fix the plugin' "$SANDBOX/cache/session-state.yaml"
 }
 
 @test "raw client.SessionLog.QueryAsync passes through to mcpserver-repl" {

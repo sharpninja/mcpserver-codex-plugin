@@ -15,7 +15,7 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CODEX_PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
+CODEX_PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 CACHE_DIR="${PLUGIN_ROOT_OVERRIDE:-$CODEX_PLUGIN_ROOT}/cache"
 TURN_FILE="$CACHE_DIR/current-turn.yaml"
 
@@ -133,14 +133,10 @@ printf '%s\n' "$BUILD_OUT" > "$BUILD_LOG"
 
 # ─── Update current-turn.yaml ────────────────────────────────────────────
 if [ -f "$TURN_FILE" ]; then
-    # Increment codeEdits + set lastBuildStatus (portable sed)
-    CURRENT_EDITS="$(grep '^codeEdits:' "$TURN_FILE" | head -1 | sed 's/^codeEdits:[[:space:]]*//')"
-    CURRENT_EDITS="${CURRENT_EDITS:-0}"
-    NEW_EDITS=$((CURRENT_EDITS + 1))
-    # Rewrite file (sed -i differs across platforms; use temp file)
+    # Only update build status here. codeEdits are owned by appendActions so
+    # one write/edit event is counted exactly once.
     TMP="$(mktemp)"
-    awk -v edits="$NEW_EDITS" -v status="$BUILD_STATUS" '
-        /^codeEdits:/ { print "codeEdits: " edits; next }
+    awk -v status="$BUILD_STATUS" '
         /^lastBuildStatus:/ { print "lastBuildStatus: " status; next }
         { print }
     ' "$TURN_FILE" > "$TMP" && mv "$TMP" "$TURN_FILE"
