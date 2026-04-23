@@ -25,6 +25,11 @@ This is idempotent and should be called once per conversation context.
 
 # TODO Management
 
+## Usage Guidance
+
+Use TODO data to refine or confirm the current plan after checking session/task state.
+Do not start with TODO enumeration when session state already identifies the active task.
+
 ## Overview
 
 To interact with project TODOs, use the `workflow.todo.*` namespace through

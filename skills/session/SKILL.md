@@ -25,6 +25,24 @@ This is idempotent and should be called once per conversation context.
 
 # Session Log Management
 
+## Preferred Workflow
+
+For most work sessions:
+1. Bootstrap session logging once.
+2. Open or resume the session.
+3. On each user request, begin a turn.
+4. Consult current session/task state before asking the user for context.
+5. Update the turn with relevant files, decisions, and actions.
+6. Complete the turn after verification or record failure if blocked.
+
+For phone-driven tasks:
+1. Begin turn.
+2. Capture a screenshot with `adb_step`.
+3. Inspect current UI state.
+4. Perform the next device action with `adb_step`.
+5. Capture another screenshot.
+6. Log result and continue.
+
 ## Overview
 
 To manage agent session logs, use the `workflow.sessionlog.*` namespace through
@@ -41,11 +59,11 @@ Format: `<Agent>-<yyyyMMddTHHmmssZ>-<suffix>`
 
 Regex: `^[A-Z][A-Za-z0-9]*-\d{8}T\d{6}Z-[a-z0-9]+(?:-[a-z0-9]+)*$`
 
-- Agent name must be PascalCase (e.g. `ClaudeCode`, `Copilot`, `Cursor`)
+- Agent name must be PascalCase (e.g. `Codex`, `Copilot`, `Cursor`)
 - Timestamp must be ISO 8601 compact UTC: `yyyyMMddTHHmmssZ`
 - Suffix must be lowercase kebab-case: `feature-auth`, `bugfix-timeout`
 
-Valid examples: `ClaudeCode-20260409T120000Z-implement-auth`, `Copilot-20260304T113901Z-refactor-session`
+Valid examples: `Codex-20260409T120000Z-implement-auth`, `Copilot-20260304T113901Z-refactor-session`
 
 Invalid: `claudecode-20260409T120000Z-task` (lowercase agent), `Copilot-20260304-feature` (missing time component)
 
@@ -91,10 +109,10 @@ payload:
   requestId: req-20260409T120001Z-open-001
   method: workflow.sessionlog.openSession
   params:
-    agent: ClaudeCode
-    sessionId: ClaudeCode-20260409T120001Z-implement-auth
+    agent: Codex
+    sessionId: Codex-20260409T120001Z-implement-auth
     title: Implement JWT authentication
-    model: claude-sonnet-4-6
+    model: gpt-5.4
 ```
 
 ```yaml
@@ -102,7 +120,7 @@ type: result
 payload:
   requestId: req-20260409T120001Z-open-001
   result:
-    sessionId: ClaudeCode-20260409T120001Z-implement-auth
+    sessionId: Codex-20260409T120001Z-implement-auth
     started: 2026-04-09T12:00:01Z
 ```
 
@@ -255,7 +273,7 @@ payload:
   requestId: req-20260409T120008Z-history-001
   method: workflow.sessionlog.queryHistory
   params:
-    agent: ClaudeCode
+    agent: Codex
     limit: 10
     offset: 0
 ```
@@ -266,10 +284,10 @@ payload:
   requestId: req-20260409T120008Z-history-001
   result:
     sessions:
-      - agent: ClaudeCode
-        sessionId: ClaudeCode-20260409T120001Z-implement-auth
+      - agent: Codex
+        sessionId: Codex-20260409T120001Z-implement-auth
         title: Implement JWT authentication
-        model: claude-sonnet-4-6
+        model: gpt-5.4
         started: 2026-04-09T12:00:01Z
         lastUpdated: 2026-04-09T12:30:00Z
         status: completed

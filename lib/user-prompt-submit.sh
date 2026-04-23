@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# user-prompt-submit.sh — UserPromptSubmit hook for the McpServer Claude Code plugin.
+# user-prompt-submit.sh — UserPromptSubmit hook for the McpServer Codex plugin.
 #
 # Runs on every user prompt. Auto-opens a session log turn via
 # workflow.sessionlog.beginTurn so agents cannot skip the Per-User-Message
@@ -7,7 +7,7 @@
 # requestId to cache/current-turn.yaml so the Stop hook can verify the turn
 # was completed before the response finalizes.
 #
-# Input (stdin): Claude Code UserPromptSubmit payload as JSON with at least:
+# Input (stdin): Codex UserPromptSubmit payload as JSON with at least:
 #   { "prompt": "<user message>", "session_id": "...", ... }
 #
 # Output (stdout): JSON with optional additionalContext. Exits 0 unconditionally
@@ -99,14 +99,39 @@ queryText: |
 ${QUERY_TEXT_BLOCK}
 EOF
 
+# Escape arbitrary text for JSON string embedding without depending on jq.
+json_escape() {
+    awk '
+        BEGIN { ORS = "" }
+        {
+            gsub(/\\/, "\\\\")
+            gsub(/"/, "\\\"")
+            gsub(/\r/, "\\r")
+            gsub(/\t/, "\\t")
+            if (NR > 1) {
+                printf "\\n"
+            }
+            printf "%s", $0
+        }
+    ' <<<"$1"
+}
+
 # Inject a per-turn reminder into the agent's context so it sees the
-# exact contract that applies to this turn. The stop-gate hook auto-closes
-# the turn via the plugin's own repl-invoke.sh shim — the agent is NOT
-# expected to invoke workflow.sessionlog.* (those verbs are not exposed as
-# MCP tools).
-REMINDER="session log turn ${TURN_REQUEST_ID} is now active. Run code-verify.sh after each source edit and run stop-gate.sh before the final response. workflow.* methods should go through lib/repl-invoke.sh rather than directly to mcpserver-repl."
+# exact contract that applies to this turn. Prioritize MCP continuity and
+# attached-device guidance first; keep verification reminders secondary.
+REMINDER="$(cat <<EOF
+A session log turn is active. Use McpServer as the default source of task continuity:
+1. Prefer session/task state and recent checkpoints over asking the user for context.
+2. Use TODO and requirements tools only as needed.
+3. For attached Android validation, use adb_step for screenshot -> inspect -> act -> screenshot loops.
+4. After meaningful progress or a failed validation cycle, record/update the session log.
+5. Run code-verify.sh after source edits and stop-gate.sh before the final response.
+EOF
+)"
+
+REMINDER_JSON="$(json_escape "$REMINDER")"
 
 printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","status":"turn-opened","turnRequestId":"%s","additionalContext":"%s"}}\n' \
     "$TURN_REQUEST_ID" \
-    "$REMINDER"
+    "$REMINDER_JSON"
 exit 0

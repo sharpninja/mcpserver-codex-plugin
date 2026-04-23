@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# stop-gate.sh — Stop hook for the McpServer Claude Code plugin.
+# stop-gate.sh — Stop hook for the McpServer Codex plugin.
 #
-# Runs when Claude is about to finalize its response. Verifies that the
+# Runs when Codex is about to finalize its response. Verifies that the
 # active session log turn (opened by user-prompt-submit.sh) was completed
-# with actions recorded. If not, blocks Stop and returns a reason so Claude
+# with actions recorded. If not, blocks Stop and returns a reason so Codex
 # continues and fulfills the protocol.
 #
 # Additional gate: if the turn cache marks lastBuildStatus=failed after a
 # code edit in this turn, Stop is blocked until a successful build is recorded
 # OR the agent explicitly sets an "accepted-failure" flag.
 #
-# Input (stdin): Claude Code Stop payload.
+# Input (stdin): Codex Stop payload.
 # Output (stdout): JSON. When blocking returns {"decision":"block","reason":"..."}.
 set -uo pipefail
 
@@ -19,11 +19,12 @@ CODEX_PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 CACHE_DIR="${PLUGIN_ROOT_OVERRIDE:-$CODEX_PLUGIN_ROOT}/cache"
 TURN_FILE="$CACHE_DIR/current-turn.yaml"
 
-# Read stdin (may be empty) so Claude Code doesn't complain about an unread pipe.
+# Read stdin (may be empty) so the hook runtime doesn't complain about an unread pipe.
 cat >/dev/null 2>&1 || true
 
-# Avoid re-prompting loops: if Claude Code already set stop_hook_active=true on
-# a previous block, let this Stop through.
+# Avoid re-prompting loops: if the hook runtime already set stop_hook_active=true
+# on a previous block, let this Stop through. Keep the existing env var name for
+# compatibility with the host runtime.
 STOP_HOOK_ACTIVE="${CLAUDE_STOP_HOOK_ACTIVE:-false}"
 if [ "$STOP_HOOK_ACTIVE" = "true" ]; then
     printf '{"hookSpecificOutput":{"hookEventName":"Stop","status":"already-reprompted"}}\n'
