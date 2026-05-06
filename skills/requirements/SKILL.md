@@ -22,7 +22,9 @@ This is idempotent and should be called once per conversation context.
 
 ## Overview
 
-To manage functional requirements (FR), technical requirements (TR), test requirements (TEST), and their traceability mappings, use the `workflow.requirements.*` REPL command namespace via `mcpserver-repl --agent-stdio`. All operations follow the standard YAML envelope protocol.
+To manage functional requirements (FR), technical requirements (TR), test requirements (TEST), and their traceability mappings, use this Codex plugin's `lib/repl-invoke.sh` wrapper for the `workflow.requirements.*` namespace. Do not substitute raw REST calls, generic `mcpserver-repl --agent-stdio`, helper modules, or another agent's plugin for normal requirements work.
+
+The database is the source of truth for requirements. Markdown files are import/export projections only. Every operation is scoped to the workspace resolved from the signed marker, and generated Markdown or ZIP output must contain only the requested workspace's FR, TR, TEST, and traceability links.
 
 ## Requirement ID Conventions
 
@@ -222,7 +224,7 @@ Follow the same pattern as FR: use `workflow.requirements.updateTest` and `workf
 
 ## Requirement Mappings
 
-Mappings link an FR to one or more TRs and TESTIDs, forming the traceability matrix.
+Mappings link an FR to one or more TRs and TEST IDs in the current workspace, forming the traceability matrix.
 
 ### Listing Mappings
 
@@ -244,10 +246,14 @@ payload:
   method: workflow.requirements.createMapping
   params:
     frId: FR-MCP-001
-    trId: TR-MCP-ARCH-001
-    testId: TEST-MCP-001
-    notes: Core authentication flow — FR covered by ARCH constraint and unit test
+    trIds:
+      - TR-MCP-ARCH-001
+    testIds:
+      - TEST-MCP-001
+    notes: Core authentication flow covered by ARCH constraint and unit test
 ```
+
+Legacy single-link `trId` and `testId` inputs are accepted for compatibility. Prefer `trIds` and `testIds` for all new calls.
 
 The result confirms the stored mapping:
 
@@ -261,7 +267,7 @@ payload:
       trId: TR-MCP-ARCH-001
       testId: TEST-MCP-001
       createdAt: 2026-04-09T12:00:12Z
-      notes: Core authentication flow — FR covered by ARCH constraint and unit test
+      notes: Core authentication flow covered by ARCH constraint and unit test
 ```
 
 ### Deleting a Mapping
@@ -278,7 +284,7 @@ payload:
 
 ## Document Generation
 
-To generate formatted requirements documents from stored data:
+To generate formatted requirements documents from the current workspace database slice:
 
 ```yaml
 type: request

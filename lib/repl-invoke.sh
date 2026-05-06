@@ -166,7 +166,24 @@ _repl_bootstrap_state() {
         local existing_status
         existing_status="$(_repl_session_state_value "status")"
         if [ "$existing_status" = "verified" ]; then
-            return 0
+            # Do not reuse a verified cache for a different workspace. Marker
+            # state is per-workspace and the session id/source context must
+            # follow the marker discovered from this start directory.
+            # shellcheck source=./marker-resolver.sh
+            source "${REPL_INVOKE_SCRIPT_DIR}/marker-resolver.sh" || return 1
+            local marker_file marker_workspace existing_workspace
+            marker_file=$(find_marker_file "$start_dir" 2>/dev/null || true)
+            marker_workspace=""
+            if [ -n "$marker_file" ]; then
+                marker_workspace="$(parse_marker_field "$marker_file" "workspacePath" 2>/dev/null || true)"
+            fi
+            existing_workspace="$(_repl_session_state_value "workspacePath")"
+            if [ -z "$marker_file" ]; then
+                return 0
+            fi
+            if [ -n "$marker_workspace" ] && [ "$existing_workspace" = "$marker_workspace" ]; then
+                return 0
+            fi
         fi
     fi
 

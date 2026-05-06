@@ -110,9 +110,31 @@ verify_signature() {
             # Trim whitespace
             key=$(echo "$key" | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
             val=$(echo "$val" | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
-            payload+="endpoints.${key}=${val}"$'\n'
+    payload+="endpoints.${key}=${val}"$'\n'
         fi
     done < "$marker_file"
+
+    # Include the signed agent plugin contract digest when present. Older
+    # markers do not have agent_plugins and remain valid without these lines.
+    local agent_plugins_policy agent_plugins_digest
+    agent_plugins_policy=$(sed -n '/^agent_plugins:/,/^[^ ]/p' "$marker_file" 2>/dev/null \
+        | grep "^[[:space:]]*policy:" \
+        | head -1 \
+        | tr -d '\r' \
+        | sed "s/^[[:space:]]*policy:[[:space:]]*//" \
+        | sed 's/^"\(.*\)"$/\1/' \
+        | sed "s/^'\(.*\)'$/\1/")
+    agent_plugins_digest=$(sed -n '/^agent_plugins:/,/^[^ ]/p' "$marker_file" 2>/dev/null \
+        | grep "^[[:space:]]*contract_digest:" \
+        | head -1 \
+        | tr -d '\r' \
+        | sed "s/^[[:space:]]*contract_digest:[[:space:]]*//" \
+        | sed 's/^"\(.*\)"$/\1/' \
+        | sed "s/^'\(.*\)'$/\1/")
+    if [ -n "$agent_plugins_policy" ] || [ -n "$agent_plugins_digest" ]; then
+        payload+="agentPlugins.policy=${agent_plugins_policy}"$'\n'
+        payload+="agentPlugins.contractDigest=${agent_plugins_digest}"$'\n'
+    fi
 
     # Extract stored signature value
     local stored_signature=""
