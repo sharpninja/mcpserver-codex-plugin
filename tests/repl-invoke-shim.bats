@@ -11,7 +11,9 @@ LIB="$PLUGIN_ROOT/lib/repl-invoke.sh"
 
 setup() {
     SANDBOX="$(mktemp -d)"
-    mkdir -p "$SANDBOX/cache" "$SANDBOX/bin"
+    mkdir -p "$SANDBOX/cache" "$SANDBOX/bin" "$SANDBOX/workspace"
+    export STUB_LOG="$SANDBOX/repl-calls.log"
+    export STUB_DB="$SANDBOX/requirements-fr.db"
 
 # Stub mcpserver-repl: emulates the real dispatcher — success for valid
 # client.* methods, type:error for the workflow.* fictions so any future
@@ -20,12 +22,57 @@ setup() {
 #!/usr/bin/env bash
 input="$(cat)"
 method="$(printf '%s\n' "$input" | grep '^[[:space:]]*method:' | head -1 | sed 's/^[[:space:]]*method:[[:space:]]*//')"
+{
+    printf 'method=%s\n' "$method"
+    printf 'cwd=%s\n' "$(pwd)"
+    printf 'MCP_WORKSPACE_PATH=%s\n' "${MCP_WORKSPACE_PATH:-}"
+    printf 'MCP_SERVER_URL=%s\n' "${MCP_SERVER_URL:-}"
+    printf '%s\n' "$input" | sed 's/^/input: /'
+    printf '%s\n' '---'
+} >> "${STUB_LOG:-/dev/null}"
+
+extract_yaml_value() {
+    printf '%s\n' "$input" | grep "^[[:space:]]*$1:" | tail -1 | sed "s/^[[:space:]]*$1:[[:space:]]*//"
+}
+
 case "$method" in
     client.SessionLog.SubmitAsync|client.SessionLog.QueryAsync|client.SessionLog.AppendDialogAsync|client.Todo.QueryAsync|client.Todo.UpdateAsync|client.Todo.GetAsync|client.Todo.GetByIdAsync)
         printf 'type: response\npayload:\n  ok: true\n'
         ;;
-    workflow.sessionlog.*)
+    workflow.sessionlog.*|workflow.requirements.*)
         printf 'type: error\npayload:\n  code: method_not_found\n  message: not routed\n'
+        ;;
+    client.Requirements.CreateFrAsync)
+        id="$(extract_yaml_value id)"
+        title="$(extract_yaml_value title)"
+        body="$(extract_yaml_value body)"
+        printf '%s|%s|%s\n' "$id" "$title" "$body" >> "$STUB_DB"
+        printf 'type: result\npayload:\n  result:\n    item:\n      id: %s\n      title: %s\n      description: %s\n' "$id" "$title" "$body"
+        ;;
+    client.Requirements.ListFrAsync)
+        if [ "${STUB_REQUIRE_COMPAT_AUTH:-}" = "1" ] && [ -n "${MCP_WORKSPACE_PATH:-}" ]; then
+            printf 'type: error\npayload:\n  code: method_invocation_error\n  message: Authentication required: no credential is configured on this client.\n'
+            exit 0
+        fi
+        printf 'type: result\npayload:\n  result:\n    items:\n'
+        if [ -f "$STUB_DB" ]; then
+            while IFS='|' read -r id title body; do
+                [ -z "$id" ] && continue
+                printf '      - id: %s\n        title: %s\n        description: %s\n' "$id" "$title" "$body"
+            done < "$STUB_DB"
+        fi
+        printf '    totalCount: %s\n' "$(wc -l < "$STUB_DB" 2>/dev/null || printf 0)"
+        ;;
+    client.Requirements.GetFrAsync)
+        id="$(extract_yaml_value id)"
+        printf 'type: result\npayload:\n  result:\n    item:\n      id: %s\n      title: Stored FR\n      description: Stored body\n' "$id"
+        ;;
+    client.Requirements.GenerateAsync)
+        doc="$(extract_yaml_value doc)"
+        printf 'type: result\npayload:\n  result:\n    content: |\n      # Requirement Traceability Matrix\n      doc=%s\n    format: markdown\n' "$doc"
+        ;;
+    client.Requirements.GetTrAsync|client.Requirements.GetTestAsync|client.Requirements.DeleteFrAsync|client.Requirements.DeleteTrAsync|client.Requirements.DeleteTestAsync|client.Requirements.ListTrAsync|client.Requirements.ListTestAsync|client.Requirements.ListMappingsAsync|client.Requirements.CreateTrAsync|client.Requirements.UpdateFrAsync|client.Requirements.UpdateTrAsync|client.Requirements.CreateTestAsync|client.Requirements.UpdateTestAsync|client.Requirements.UpsertMappingAsync|client.Requirements.DeleteMappingAsync|client.Requirements.IngestAsync)
+        printf 'type: result\npayload:\n  result:\n    ok: true\n'
         ;;
     *)
         printf 'type: error\npayload:\n  code: method_invocation_error\n  message: unknown\n'
@@ -74,6 +121,22 @@ read_status() {
 
 read_edits() {
     grep '^codeEdits:' "$SANDBOX/cache/current-turn.yaml" | head -1 | sed 's/^codeEdits:[[:space:]]*//'
+}
+
+write_requirements_state() {
+    cat > "$SANDBOX/cache/session-state.yaml" <<EOF
+status: verified
+sessionId: Codex-20260419T000000Z-test
+sourceType: Codex
+title: Requirements shim test
+model: codex
+started: 2026-04-19T00:00:00Z
+lastUpdated: 2026-04-19T00:00:00Z
+workspacePath: "$SANDBOX/workspace"
+workspace: "test"
+baseUrl: "http://127.0.0.1:8765"
+timestamp: "2026-04-19T00:00:00Z"
+EOF
 }
 
 @test "completeTurn flips current-turn.yaml status from in_progress to completed" {
@@ -197,4 +260,73 @@ model: gpt-5.4"
     export PATH="$PATH_BACKUP"
     [ "$status" -eq 0 ]
     [ "$(read_status)" = "completed" ]
+}
+
+@test "workflow.requirements.listFr falls back to typed client instead of method_not_found" {
+    write_requirements_state
+    source "$LIB"
+    run repl_invoke "workflow.requirements.listFr" ""
+    [ "$status" -eq 0 ]
+    echo "$output" | grep -q "type: result"
+    ! echo "$output" | grep -q "method_not_found"
+    grep -q "method=workflow.requirements.listFr" "$STUB_LOG"
+    grep -q "method=client.Requirements.ListFrAsync" "$STUB_LOG"
+}
+
+@test "workflow.requirements.createFr listFr getFr works through typed fallback" {
+    write_requirements_state
+    source "$LIB"
+
+    run repl_invoke "workflow.requirements.createFr" "id: FR-MCP-901
+title: Requirements shim
+description: Plugin wrapper must route requirements calls
+priority: high
+area: MCP"
+    [ "$status" -eq 0 ]
+    echo "$output" | grep -q "FR-MCP-901"
+
+    run repl_invoke "workflow.requirements.listFr" ""
+    [ "$status" -eq 0 ]
+    echo "$output" | grep -q "FR-MCP-901"
+
+    run repl_invoke "workflow.requirements.getFr" "id: FR-MCP-901"
+    [ "$status" -eq 0 ]
+    echo "$output" | grep -q "FR-MCP-901"
+}
+
+@test "workflow.requirements.generateDocument returns content through typed fallback" {
+    write_requirements_state
+    source "$LIB"
+    run repl_invoke "workflow.requirements.generateDocument" "format: markdown
+docType: matrix"
+    [ "$status" -eq 0 ]
+    echo "$output" | grep -q "Requirement Traceability Matrix"
+    grep -q "method=client.Requirements.GenerateAsync" "$STUB_LOG"
+    grep -q "input:     doc: mapping" "$STUB_LOG"
+}
+
+@test "workflow.requirements uses session-state workspace path and base URL for mcpserver-repl" {
+    write_requirements_state
+    source "$LIB"
+    run repl_invoke "workflow.requirements.listFr" ""
+    [ "$status" -eq 0 ]
+    grep -q "cwd=$SANDBOX/workspace" "$STUB_LOG"
+    grep -q "MCP_WORKSPACE_PATH=$SANDBOX/workspace" "$STUB_LOG"
+    grep -q "MCP_SERVER_URL=http://127.0.0.1:8765" "$STUB_LOG"
+}
+
+@test "workflow.requirements retries typed fallback with compatibility marker after marker auth failure" {
+    write_requirements_state
+    export MCPSERVER_API_KEY="test-api-key"
+    export STUB_REQUIRE_COMPAT_AUTH=1
+    source "$LIB"
+
+    run repl_invoke "workflow.requirements.listFr" ""
+
+    unset MCPSERVER_API_KEY
+    unset STUB_REQUIRE_COMPAT_AUTH
+    [ "$status" -eq 0 ]
+    [ "$(grep -c "method=client.Requirements.ListFrAsync" "$STUB_LOG")" -eq 2 ]
+    grep -q "MCP_WORKSPACE_PATH=$SANDBOX/workspace" "$STUB_LOG"
+    grep -q '^MCP_WORKSPACE_PATH=$' "$STUB_LOG"
 }
