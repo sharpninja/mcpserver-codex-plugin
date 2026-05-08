@@ -50,7 +50,7 @@ case "$method" in
         printf 'type: result\npayload:\n  result:\n    item:\n      id: %s\n      title: %s\n      description: %s\n' "$id" "$title" "$body"
         ;;
     client.Requirements.ListFrAsync)
-        if [ "${STUB_REQUIRE_COMPAT_AUTH:-}" = "1" ] && [ -n "${MCP_WORKSPACE_PATH:-}" ]; then
+        if [ "${STUB_REQUIRE_COMPAT_AUTH:-}" = "1" ] && [ "${MCP_WORKSPACE_PATH:-}" = "${STUB_AUTH_FAIL_WORKSPACE_PATH:-}" ]; then
             printf 'type: error\npayload:\n  code: method_invocation_error\n  message: Authentication required: no credential is configured on this client.\n'
             exit 0
         fi
@@ -315,18 +315,20 @@ docType: matrix"
     grep -q "MCP_SERVER_URL=http://127.0.0.1:8765" "$STUB_LOG"
 }
 
-@test "workflow.requirements retries typed fallback with compatibility marker after marker auth failure" {
+@test "workflow.requirements prefers compatibility marker when direct marker auth would fail" {
     write_requirements_state
     export MCPSERVER_API_KEY="test-api-key"
     export STUB_REQUIRE_COMPAT_AUTH=1
+    export STUB_AUTH_FAIL_WORKSPACE_PATH="$SANDBOX/workspace"
     source "$LIB"
 
     run repl_invoke "workflow.requirements.listFr" ""
 
     unset MCPSERVER_API_KEY
     unset STUB_REQUIRE_COMPAT_AUTH
+    unset STUB_AUTH_FAIL_WORKSPACE_PATH
     [ "$status" -eq 0 ]
-    [ "$(grep -c "method=client.Requirements.ListFrAsync" "$STUB_LOG")" -eq 2 ]
-    grep -q "MCP_WORKSPACE_PATH=$SANDBOX/workspace" "$STUB_LOG"
-    grep -q '^MCP_WORKSPACE_PATH=$' "$STUB_LOG"
+    [ "$(grep -c "method=client.Requirements.ListFrAsync" "$STUB_LOG")" -eq 1 ]
+    grep -q "MCP_WORKSPACE_PATH=.*repl-marker" "$STUB_LOG"
+    ! grep -q "method=client.Requirements.ListFrAsync.*MCP_WORKSPACE_PATH=$SANDBOX/workspace" "$STUB_LOG"
 }

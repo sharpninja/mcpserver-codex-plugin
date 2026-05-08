@@ -106,6 +106,16 @@ _repl_response_is_error() {
     printf '%s\n' "${1:-}" | grep -q 'type: error'
 }
 
+_repl_response_has_empty_result() {
+    printf '%s\n' "${1:-}" | awk '
+        /^[[:space:]]*result:[[:space:]]*$/ { in_result = 1; next }
+        in_result && /^[[:space:]]*$/ { next }
+        in_result && /^    [^[:space:]]/ { found_child = 1; exit }
+        in_result && /^[^[:space:]]/ { empty_result = 1; exit }
+        END { exit((in_result && !found_child) || empty_result ? 0 : 1) }
+    '
+}
+
 _repl_write_session_state() {
     local status="$1"
     local source_type="$2"
@@ -330,6 +340,20 @@ _repl_path_for_bash() {
     printf '%s' "$path_value"
 }
 
+_repl_path_for_repl() {
+    local path_value="$(_repl_unquote "${1:-}")"
+    if [ -z "$path_value" ]; then
+        return 1
+    fi
+
+    if command -v cygpath >/dev/null 2>&1; then
+        cygpath -w "$path_value"
+        return $?
+    fi
+
+    printf '%s' "$path_value"
+}
+
 _repl_compat_marker_field() {
     local marker_file="$1"
     local field="$2"
@@ -373,6 +397,10 @@ _repl_create_compat_marker() {
     base_url="${MCPSERVER_BASE_URL:-$(_repl_unquote "$(_repl_session_state_value "baseUrl")")}"
 
     workspace_path_bash="$(_repl_path_for_bash "$workspace_path" 2>/dev/null || true)"
+    if ! declare -F find_marker_file >/dev/null 2>&1 || ! declare -F parse_marker_field >/dev/null 2>&1; then
+        # shellcheck source=./marker-resolver.sh
+        source "${REPL_INVOKE_SCRIPT_DIR}/marker-resolver.sh" || return 1
+    fi
     marker_file=""
     if [ -n "$workspace_path_bash" ] && declare -F find_marker_file >/dev/null 2>&1; then
         marker_file="$(find_marker_file "$workspace_path_bash" 2>/dev/null || true)"
@@ -444,7 +472,37 @@ _repl_create_compat_marker() {
     payload+="endpoints.serverStartupUtc=${server_startup}"$'\n'
     payload+="endpoints.markerFileTimestamp=${marker_timestamp}"$'\n'
 
-    signature="$(printf '%s' "$payload" | openssl dgst -sha256 -hmac "$api_key" -hex 2>/dev/null | awk '{print toupper($NF)}')"
+    local payload_b64 api_key_b64
+    payload_b64="$(printf '%s' "$payload" | base64 | tr -d '\r\n')"
+    api_key_b64="$(printf '%s' "$api_key" | base64 | tr -d '\r\n')"
+    signature=""
+    export PAYLOAD_B64="$payload_b64"
+    export API_KEY_B64="$api_key_b64"
+    if command -v pwsh.exe >/dev/null 2>&1; then
+        local hmac_script="${REPL_INVOKE_CACHE_DIR}/hmac-marker.$$.$RANDOM.ps1"
+        cat > "$hmac_script" <<'PS1'
+$payload = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:PAYLOAD_B64))
+$apiKey = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:API_KEY_B64))
+$hmac = [Security.Cryptography.HMACSHA256]::new([Text.Encoding]::UTF8.GetBytes($apiKey))
+try { [Convert]::ToHexString($hmac.ComputeHash([Text.Encoding]::UTF8.GetBytes($payload))) } finally { $hmac.Dispose() }
+PS1
+        signature="$(pwsh.exe -NoLogo -NoProfile -File "$(_repl_path_for_repl "$hmac_script" 2>/dev/null || printf '%s' "$hmac_script")" 2>/dev/null | tr -d '\r\n')"
+        rm -f "$hmac_script"
+    elif command -v powershell.exe >/dev/null 2>&1; then
+        local hmac_script="${REPL_INVOKE_CACHE_DIR}/hmac-marker.$$.$RANDOM.ps1"
+        cat > "$hmac_script" <<'PS1'
+$payload = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:PAYLOAD_B64))
+$apiKey = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:API_KEY_B64))
+$hmac = [Security.Cryptography.HMACSHA256]::new([Text.Encoding]::UTF8.GetBytes($apiKey))
+try { [BitConverter]::ToString($hmac.ComputeHash([Text.Encoding]::UTF8.GetBytes($payload))).Replace('-', '') } finally { $hmac.Dispose() }
+PS1
+        signature="$(powershell.exe -NoLogo -NoProfile -File "$(_repl_path_for_repl "$hmac_script" 2>/dev/null || printf '%s' "$hmac_script")" 2>/dev/null | tr -d '\r\n')"
+        rm -f "$hmac_script"
+    fi
+    unset PAYLOAD_B64 API_KEY_B64
+    if [ -z "$signature" ]; then
+        signature="$(printf '%s' "$payload" | openssl dgst -sha256 -hmac "$api_key" -hex 2>/dev/null | awk '{print toupper($NF)}')"
+    fi
     [ -z "$signature" ] && return 1
 
     compat_dir="${REPL_INVOKE_CACHE_DIR}/repl-marker.$$.$RANDOM"
@@ -485,6 +543,60 @@ signature:
   value: ${signature}
 EOF
 
+    if command -v pwsh.exe >/dev/null 2>&1 || command -v powershell.exe >/dev/null 2>&1; then
+        local sign_script="${REPL_INVOKE_CACHE_DIR}/sign-marker.$$.$RANDOM.ps1"
+        cat > "$sign_script" <<'PS1'
+$markerPath = $env:MARKER_PATH
+$lines = Get-Content -LiteralPath $markerPath
+function Get-Top([string]$name) {
+    foreach ($line in $lines) {
+        if ($line -match ('^' + [regex]::Escape($name) + ':\s*(.*)$')) {
+            return $Matches[1].Trim().Trim('"')
+        }
+    }
+    return ''
+}
+function Get-Endpoint([string]$name) {
+    $inEndpoints = $false
+    foreach ($line in $lines) {
+        if ($line -match '^endpoints:\s*$') { $inEndpoints = $true; continue }
+        if ($inEndpoints -and $line -match '^\S') { break }
+        if ($inEndpoints -and $line -match ('^\s+' + [regex]::Escape($name) + ':\s*(.*)$')) {
+            return $Matches[1].Trim().Trim('"')
+        }
+    }
+    return ''
+}
+$builder = [Text.StringBuilder]::new()
+foreach ($name in @('canonicalization')) { [void]$builder.AppendLine("$name=marker-v1") }
+foreach ($name in @('port','baseUrl','apiKey','workspace','workspacePath','pid','startedAt','markerWrittenAtUtc','serverStartedAtUtc')) {
+    [void]$builder.AppendLine("$name=$(Get-Top $name)")
+}
+foreach ($name in @('health','swagger','swaggerUi','mcpTransport','sessionLog','sessionLogDialog','contextSearch','contextPack','contextSources','todo','repo','desktop','gitHub','tools','workspace','serverStartupUtc','markerFileTimestamp')) {
+    [void]$builder.AppendLine("endpoints.$name=$(Get-Endpoint $name)")
+}
+$apiKey = Get-Top 'apiKey'
+$hmac = [Security.Cryptography.HMACSHA256]::new([Text.Encoding]::UTF8.GetBytes($apiKey))
+try {
+    $signature = [Convert]::ToHexString($hmac.ComputeHash([Text.Encoding]::UTF8.GetBytes($builder.ToString())))
+} finally {
+    $hmac.Dispose()
+}
+$updated = $lines | ForEach-Object {
+    if ($_ -match '^\s+value:\s+') { "  value: $signature" } else { $_ }
+}
+Set-Content -LiteralPath $markerPath -Value $updated -Encoding utf8
+PS1
+        local marker_path_for_repl
+        marker_path_for_repl="$(_repl_path_for_repl "$compat_marker" 2>/dev/null || printf '%s' "$compat_marker")"
+        if command -v pwsh.exe >/dev/null 2>&1; then
+            MARKER_PATH="$marker_path_for_repl" pwsh.exe -NoLogo -NoProfile -File "$(_repl_path_for_repl "$sign_script" 2>/dev/null || printf '%s' "$sign_script")" >/dev/null 2>&1 || true
+        else
+            MARKER_PATH="$marker_path_for_repl" powershell.exe -NoLogo -NoProfile -File "$(_repl_path_for_repl "$sign_script" 2>/dev/null || printf '%s' "$sign_script")" >/dev/null 2>&1 || true
+        fi
+        rm -f "$sign_script"
+    fi
+
     printf '%s' "$compat_dir"
 }
 
@@ -521,7 +633,7 @@ _repl_invoke_raw_in_workspace() {
     if [ "$marker_mode" = "compat" ]; then
         cleanup_dir="$(_repl_create_compat_marker)" || return 1
         workspace_cwd="$cleanup_dir"
-        workspace_path=""
+        workspace_path="$(_repl_path_for_repl "$cleanup_dir" 2>/dev/null || printf '%s' "$cleanup_dir")"
     fi
 
     local envelope="type: request
@@ -846,6 +958,13 @@ _repl_workflow_requirements() {
     _repl_requirements_bootstrap_state "$params_yaml" || return 1
 
     workflow_params="$(_repl_requirements_workflow_params "$operation" "$params_yaml")"
+    response="$(_repl_invoke_raw_in_workspace "$method" "$workflow_params" "compat" 2>&1)"
+    status=$?
+    if [ $status -eq 0 ] && ! _repl_response_has_empty_result "$response"; then
+        printf '%s\n' "$response"
+        return 0
+    fi
+
     response="$(_repl_invoke_raw_in_workspace "$method" "$workflow_params" 2>&1)"
     status=$?
     if [ $status -eq 0 ]; then
@@ -860,9 +979,9 @@ _repl_workflow_requirements() {
 
     typed_method="$(_repl_requirements_typed_method "$operation")"
     typed_params="$(_repl_requirements_typed_params "$operation" "$params_yaml")"
-    response="$(_repl_invoke_raw_in_workspace "$typed_method" "$typed_params" 2>&1)"
+    response="$(_repl_invoke_raw_in_workspace "$typed_method" "$typed_params" "compat" 2>&1)"
     status=$?
-    if [ $status -eq 0 ]; then
+    if [ $status -eq 0 ] && ! _repl_response_has_empty_result "$response"; then
         if [ "$operation" = "generateDocument" ]; then
             _repl_requirements_normalize_generate_response "$response"
         else
@@ -871,17 +990,12 @@ _repl_workflow_requirements() {
         return 0
     fi
 
-    if printf '%s\n' "$response" | grep -q 'Authentication required'; then
-        response="$(_repl_invoke_raw_in_workspace "$typed_method" "$typed_params" "compat" 2>&1)"
-        status=$?
-        if [ $status -eq 0 ] && [ "$operation" = "generateDocument" ]; then
-            _repl_requirements_normalize_generate_response "$response"
-            return 0
-        fi
-        printf '%s\n' "$response"
-        return $status
+    response="$(_repl_invoke_raw_in_workspace "$typed_method" "$typed_params" 2>&1)"
+    status=$?
+    if [ $status -eq 0 ] && [ "$operation" = "generateDocument" ]; then
+        _repl_requirements_normalize_generate_response "$response"
+        return 0
     fi
-
     printf '%s\n' "$response"
     return $status
 }
@@ -898,7 +1012,7 @@ _repl_submit_session() {
 
     local params
     params="$(_repl_build_session_submit_params "$source_type" "$session_id" "$title" "$model" "$started" "$status" "$turns_block" "$turn_count")"
-    _repl_invoke_raw "client.SessionLog.SubmitAsync" "$params" >/dev/null 2>&1
+    _repl_invoke_raw_in_workspace "client.SessionLog.SubmitAsync" "$params" "compat" >/dev/null 2>&1
 }
 
 _repl_normalized_actions_block() {
@@ -1336,4 +1450,4 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     exit $?
 fi
 
-export -f repl_invoke repl_build_envelope _repl_compat_marker_endpoint_field _repl_compat_marker_field _repl_create_compat_marker _repl_first_param_text _repl_invoke_raw _repl_invoke_raw_in_workspace _repl_invoke_with_fallback _repl_bootstrap_state _repl_emit_response _repl_generate_session_id _repl_normalized_actions_block _repl_normalized_dialog_items_block _repl_param_text _repl_path_for_bash _repl_persist_turn _repl_requirements_bootstrap_state _repl_requirements_normalize_generate_response _repl_requirements_typed_doc_type _repl_requirements_typed_method _repl_requirements_typed_params _repl_requirements_workflow_doc_type _repl_requirements_workflow_params _repl_requirement_list_field _repl_response_is_error _repl_session_meta _repl_session_state_value _repl_state_value _repl_submit_session _repl_turns_block _repl_workflow_append_actions _repl_workflow_append_dialog _repl_workflow_begin_turn _repl_workflow_bootstrap _repl_workflow_complete_turn _repl_workflow_open_session _repl_workflow_query_history _repl_workflow_requirements _repl_workflow_todo_select _repl_workflow_todo_update_selected _repl_workflow_update_turn _repl_yaml_block_get _repl_yaml_field _repl_yaml_get 2>/dev/null || true
+export -f repl_invoke repl_build_envelope _repl_compat_marker_endpoint_field _repl_compat_marker_field _repl_create_compat_marker _repl_first_param_text _repl_invoke_raw _repl_invoke_raw_in_workspace _repl_invoke_with_fallback _repl_bootstrap_state _repl_emit_response _repl_generate_session_id _repl_normalized_actions_block _repl_normalized_dialog_items_block _repl_param_text _repl_path_for_bash _repl_path_for_repl _repl_persist_turn _repl_requirements_bootstrap_state _repl_requirements_normalize_generate_response _repl_requirements_typed_doc_type _repl_requirements_typed_method _repl_requirements_typed_params _repl_requirements_workflow_doc_type _repl_requirements_workflow_params _repl_requirement_list_field _repl_response_has_empty_result _repl_response_is_error _repl_session_meta _repl_session_state_value _repl_state_value _repl_submit_session _repl_turns_block _repl_workflow_append_actions _repl_workflow_append_dialog _repl_workflow_begin_turn _repl_workflow_bootstrap _repl_workflow_complete_turn _repl_workflow_open_session _repl_workflow_query_history _repl_workflow_requirements _repl_workflow_todo_select _repl_workflow_todo_update_selected _repl_workflow_update_turn _repl_yaml_block_get _repl_yaml_field _repl_yaml_get 2>/dev/null || true
