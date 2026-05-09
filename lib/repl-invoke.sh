@@ -1099,6 +1099,144 @@ _repl_requirements_generate_http_fallback() {
     printf '    generatedAt: %s\n' "$(_repl_now_iso)"
 }
 
+_repl_sessionlog_query_http_fallback() {
+    local params_yaml="${1:-}"
+    local workspace_path workspace_path_bash base_url marker_file api_key
+    local agent model text from to limit offset
+
+    if ! command -v curl >/dev/null 2>&1; then
+        return 1
+    fi
+
+    workspace_path="$(_repl_unquote "$(_repl_session_state_value "workspacePath")")"
+    base_url="${MCPSERVER_BASE_URL:-$(_repl_unquote "$(_repl_session_state_value "baseUrl")")}"
+
+    workspace_path_bash="$(_repl_path_for_bash "$workspace_path" 2>/dev/null || true)"
+    if ! declare -F find_marker_file >/dev/null 2>&1 || ! declare -F parse_marker_field >/dev/null 2>&1; then
+        # shellcheck source=./marker-resolver.sh
+        source "${REPL_INVOKE_SCRIPT_DIR}/marker-resolver.sh" || return 1
+    fi
+    marker_file=""
+    if [ -n "$workspace_path_bash" ] && declare -F find_marker_file >/dev/null 2>&1; then
+        marker_file="$(find_marker_file "$workspace_path_bash" 2>/dev/null || true)"
+    fi
+
+    api_key="${MCPSERVER_API_KEY:-$(_repl_compat_marker_field "$marker_file" "apiKey" "")}"
+    [ -z "$workspace_path" ] && workspace_path="${MCPSERVER_WORKSPACE_PATH:-$(_repl_compat_marker_field "$marker_file" "workspacePath" "")}"
+    [ -z "$base_url" ] && base_url="$(_repl_compat_marker_field "$marker_file" "baseUrl" "")"
+    [ -z "$api_key" ] && return 1
+    [ -z "$workspace_path" ] && return 1
+    [ -z "$base_url" ] && return 1
+
+    agent="$(_repl_yaml_get "$params_yaml" "agent" 2>/dev/null || true)"
+    model="$(_repl_yaml_get "$params_yaml" "model" 2>/dev/null || true)"
+    text="$(_repl_yaml_get "$params_yaml" "text" 2>/dev/null || true)"
+    from="$(_repl_yaml_get "$params_yaml" "from" 2>/dev/null || true)"
+    to="$(_repl_yaml_get "$params_yaml" "to" 2>/dev/null || true)"
+    limit="$(_repl_yaml_get "$params_yaml" "limit" 2>/dev/null || true)"
+    offset="$(_repl_yaml_get "$params_yaml" "offset" 2>/dev/null || true)"
+
+    local tmp_body tmp_headers curl_status
+    mkdir -p "$REPL_INVOKE_CACHE_DIR"
+    tmp_body="${REPL_INVOKE_CACHE_DIR}/sessionlog-query.$$.$RANDOM.body"
+    tmp_headers="${REPL_INVOKE_CACHE_DIR}/sessionlog-query.$$.$RANDOM.headers"
+
+    curl -fsSL \
+        -D "$tmp_headers" \
+        -o "$tmp_body" \
+        -H "X-Api-Key: ${api_key}" \
+        -H "X-Workspace-Path: ${workspace_path}" \
+        --get \
+        ${agent:+--data-urlencode "agent=${agent}"} \
+        ${model:+--data-urlencode "model=${model}"} \
+        ${text:+--data-urlencode "text=${text}"} \
+        ${from:+--data-urlencode "from=${from}"} \
+        ${to:+--data-urlencode "to=${to}"} \
+        ${limit:+--data-urlencode "limit=${limit}"} \
+        ${offset:+--data-urlencode "offset=${offset}"} \
+        "${base_url%/}/mcpserver/sessionlog" >/dev/null 2>&1
+    curl_status=$?
+    if [ $curl_status -ne 0 ]; then
+        rm -f "$tmp_body" "$tmp_headers"
+        return $curl_status
+    fi
+
+    local content_type
+    content_type="$(grep -i '^content-type:' "$tmp_headers" 2>/dev/null | head -1 | sed 's/^[Cc]ontent-[Tt]ype:[[:space:]]*//' | tr -d '\r')"
+    content_type="${content_type%%;*}"
+    [ -z "$content_type" ] && content_type="application/json"
+    printf 'type: result\npayload:\n'
+    printf '  result: |\n'
+    sed 's/^/    /' "$tmp_body"
+    printf '\n'
+    printf '  contentType: %s\n' "$content_type"
+    rm -f "$tmp_body" "$tmp_headers"
+}
+
+_repl_requirements_list_http_fallback() {
+    local operation="$1"
+    local workspace_path workspace_path_bash base_url marker_file api_key route
+
+    if ! command -v curl >/dev/null 2>&1; then
+        return 1
+    fi
+
+    workspace_path="$(_repl_unquote "$(_repl_session_state_value "workspacePath")")"
+    base_url="${MCPSERVER_BASE_URL:-$(_repl_unquote "$(_repl_session_state_value "baseUrl")")}"
+
+    workspace_path_bash="$(_repl_path_for_bash "$workspace_path" 2>/dev/null || true)"
+    if ! declare -F find_marker_file >/dev/null 2>&1 || ! declare -F parse_marker_field >/dev/null 2>&1; then
+        # shellcheck source=./marker-resolver.sh
+        source "${REPL_INVOKE_SCRIPT_DIR}/marker-resolver.sh" || return 1
+    fi
+    marker_file=""
+    if [ -n "$workspace_path_bash" ] && declare -F find_marker_file >/dev/null 2>&1; then
+        marker_file="$(find_marker_file "$workspace_path_bash" 2>/dev/null || true)"
+    fi
+
+    api_key="${MCPSERVER_API_KEY:-$(_repl_compat_marker_field "$marker_file" "apiKey" "")}"
+    [ -z "$workspace_path" ] && workspace_path="${MCPSERVER_WORKSPACE_PATH:-$(_repl_compat_marker_field "$marker_file" "workspacePath" "")}"
+    [ -z "$base_url" ] && base_url="$(_repl_compat_marker_field "$marker_file" "baseUrl" "")"
+    [ -z "$api_key" ] && return 1
+    [ -z "$workspace_path" ] && return 1
+    [ -z "$base_url" ] && return 1
+
+    case "$operation" in
+        listFr) route="mcpserver/requirements/fr" ;;
+        listTr) route="mcpserver/requirements/tr" ;;
+        listTest) route="mcpserver/requirements/test" ;;
+        listMappings) route="mcpserver/requirements/mapping" ;;
+        *) return 1 ;;
+    esac
+
+    local tmp_body tmp_headers curl_status content_type
+    mkdir -p "$REPL_INVOKE_CACHE_DIR"
+    tmp_body="${REPL_INVOKE_CACHE_DIR}/requirements-list.$$.$RANDOM.body"
+    tmp_headers="${REPL_INVOKE_CACHE_DIR}/requirements-list.$$.$RANDOM.headers"
+
+    curl -fsSL \
+        -D "$tmp_headers" \
+        -o "$tmp_body" \
+        -H "X-Api-Key: ${api_key}" \
+        -H "X-Workspace-Path: ${workspace_path}" \
+        "${base_url%/}/${route}" >/dev/null 2>&1
+    curl_status=$?
+    if [ $curl_status -ne 0 ]; then
+        rm -f "$tmp_body" "$tmp_headers"
+        return $curl_status
+    fi
+
+    content_type="$(grep -i '^content-type:' "$tmp_headers" 2>/dev/null | head -1 | sed 's/^[Cc]ontent-[Tt]ype:[[:space:]]*//' | tr -d '\r')"
+    content_type="${content_type%%;*}"
+    [ -z "$content_type" ] && content_type="application/json"
+    printf 'type: result\npayload:\n'
+    printf '  result: |\n'
+    sed 's/^/    /' "$tmp_body"
+    printf '\n'
+    printf '  contentType: %s\n' "$content_type"
+    rm -f "$tmp_body" "$tmp_headers"
+}
+
 _repl_workflow_requirements() {
     local method="$1"
     local params_yaml="${2:-}"
@@ -1149,6 +1287,14 @@ _repl_workflow_requirements() {
             printf '%s\n' "$response"
         fi
         return 0
+    fi
+    if [ "$operation" = "listFr" ] || [ "$operation" = "listTr" ] || [ "$operation" = "listTest" ] || [ "$operation" = "listMappings" ]; then
+        response="$(_repl_requirements_list_http_fallback "$operation" 2>&1)"
+        status=$?
+        if [ $status -eq 0 ] && _repl_response_is_nonempty_success "$response"; then
+            printf '%s\n' "$response"
+            return 0
+        fi
     fi
     if [ "$operation" = "generateDocument" ]; then
         response="$(_repl_requirements_generate_http_fallback "$params_yaml" 2>&1)"
@@ -1470,7 +1616,32 @@ _repl_workflow_complete_turn() {
 }
 
 _repl_workflow_query_history() {
-    _repl_invoke_raw_in_workspace "client.SessionLog.QueryAsync" "$1" "compat"
+    local params_yaml="${1:-}"
+    local response status
+
+    response="$(_repl_invoke_raw_in_workspace "client.SessionLog.QueryAsync" "$params_yaml" "compat" 2>&1)"
+    status=$?
+    if [ $status -eq 0 ] && _repl_response_is_nonempty_success "$response"; then
+        printf '%s\n' "$response"
+        return 0
+    fi
+
+    response="$(_repl_invoke_raw_in_workspace "client.SessionLog.QueryAsync" "$params_yaml" 2>&1)"
+    status=$?
+    if [ $status -eq 0 ] && _repl_response_is_nonempty_success "$response"; then
+        printf '%s\n' "$response"
+        return 0
+    fi
+
+    response="$(_repl_sessionlog_query_http_fallback "$params_yaml" 2>&1)"
+    status=$?
+    if [ $status -eq 0 ] && _repl_response_is_nonempty_success "$response"; then
+        printf '%s\n' "$response"
+        return 0
+    fi
+
+    printf '%s\n' "$response"
+    return $status
 }
 
 _repl_workflow_todo_select() {
