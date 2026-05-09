@@ -35,6 +35,24 @@ extract_yaml_value() {
     printf '%s\n' "$input" | grep "^[[:space:]]*$1:" | tail -1 | sed "s/^[[:space:]]*$1:[[:space:]]*//"
 }
 
+if [[ "$method" == workflow.requirements.* ]] && [ "${STUB_WORKFLOW_REQUIREMENTS_AUTH_ERROR:-}" = "1" ]; then
+    printf 'type: error\npayload:\n  code: method_invocation_error\n  message: Authentication required: no credential is configured on this client.\n'
+    exit 0
+fi
+
+if [ "$method" = "workflow.requirements.generateDocument" ] && [ "${STUB_WORKFLOW_REQUIREMENTS_REJECT_WIKI:-}" = "1" ]; then
+    format="$(extract_yaml_value format)"
+    if [ "$format" = "wiki" ]; then
+        printf 'type: error\npayload:\n  code: invalid_argument\n  message: "Invalid format: wiki. Valid values: markdown, yaml"\n'
+        exit 0
+    fi
+fi
+
+if [ "$method" = "client.SessionLog.QueryAsync" ] && [ "${STUB_REQUIRE_COMPAT_AUTH:-}" = "1" ] && [ "${MCP_WORKSPACE_PATH:-}" = "${STUB_AUTH_FAIL_WORKSPACE_PATH:-}" ]; then
+    printf 'type: error\npayload:\n  code: method_invocation_error\n  message: Authentication required: no credential is configured on this client.\n'
+    exit 0
+fi
+
 case "$method" in
     client.SessionLog.SubmitAsync|client.SessionLog.QueryAsync|client.SessionLog.AppendDialogAsync|client.Todo.QueryAsync|client.Todo.UpdateAsync|client.Todo.GetAsync|client.Todo.GetByIdAsync)
         printf 'type: response\npayload:\n  ok: true\n'
@@ -69,7 +87,16 @@ case "$method" in
         ;;
     client.Requirements.GenerateAsync)
         doc="$(extract_yaml_value doc)"
-        printf 'type: result\npayload:\n  result:\n    content: |\n      # Requirement Traceability Matrix\n      doc=%s\n    format: markdown\n' "$doc"
+        format="$(extract_yaml_value format)"
+        if [ "${STUB_TYPED_GENERATE_EMPTY:-}" = "1" ]; then
+            printf 'type: result\npayload:\n  result:\n'
+            exit 0
+        fi
+        if [ "$format" = "wiki" ]; then
+            printf 'type: result\npayload:\n  result:\n    success: true\n    format: wiki\n    docType: all\n    generatedAtUtc: 2026-05-08T12:00:00Z\n    outputRoot: /workspace/docs/Project/wiki\n    files:\n      - relativePath: azure/Home.md\n        fullPath: /workspace/docs/Project/wiki/azure/Home.md\n        contentType: text/markdown\n        lastModifiedUtc: 2026-05-08T12:00:00Z\n'
+        else
+            printf 'type: result\npayload:\n  result:\n    content: |\n      # Requirement Traceability Matrix\n      doc=%s\n    format: markdown\n' "$doc"
+        fi
         ;;
     client.Requirements.GetTrAsync|client.Requirements.GetTestAsync|client.Requirements.DeleteFrAsync|client.Requirements.DeleteTrAsync|client.Requirements.DeleteTestAsync|client.Requirements.ListTrAsync|client.Requirements.ListTestAsync|client.Requirements.ListMappingsAsync|client.Requirements.CreateTrAsync|client.Requirements.UpdateFrAsync|client.Requirements.UpdateTrAsync|client.Requirements.CreateTestAsync|client.Requirements.UpdateTestAsync|client.Requirements.UpsertMappingAsync|client.Requirements.DeleteMappingAsync|client.Requirements.IngestAsync)
         printf 'type: result\npayload:\n  result:\n    ok: true\n'
@@ -80,6 +107,37 @@ case "$method" in
 esac
 STUB
     chmod +x "$SANDBOX/bin/mcpserver-repl"
+
+    cat > "$SANDBOX/bin/curl" <<'STUB'
+#!/usr/bin/env bash
+headers_file=""
+output_file=""
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -D)
+            headers_file="$2"
+            shift 2
+            ;;
+        -o)
+            output_file="$2"
+            shift 2
+            ;;
+        -H)
+            shift 2
+            ;;
+        -*)
+            shift
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+[ -n "$headers_file" ] && printf 'HTTP/1.1 200 OK\r\nContent-Type: application/zip\r\n\r\n' > "$headers_file"
+[ -n "$output_file" ] && printf 'PK\003\004' > "$output_file"
+exit 0
+STUB
+    chmod +x "$SANDBOX/bin/curl"
 
     cat > "$SANDBOX/cache/session-state.yaml" <<EOF
 status: verified
@@ -233,6 +291,26 @@ model: gpt-5.4"
     echo "$output" | grep -q "type: response"
 }
 
+@test "workflow.sessionlog.queryHistory uses compatibility marker without workspace env override" {
+    write_requirements_state
+    export MCPSERVER_API_KEY="test-api-key"
+    export STUB_REQUIRE_COMPAT_AUTH=1
+    export STUB_AUTH_FAIL_WORKSPACE_PATH="$SANDBOX/workspace"
+    source "$LIB"
+
+    run repl_invoke "workflow.sessionlog.queryHistory" "agent: Codex
+limit: 1"
+
+    unset MCPSERVER_API_KEY
+    unset STUB_REQUIRE_COMPAT_AUTH
+    unset STUB_AUTH_FAIL_WORKSPACE_PATH
+    [ "$status" -eq 0 ]
+    [ "$(grep -c "method=client.SessionLog.QueryAsync" "$STUB_LOG")" -eq 1 ]
+    grep -q "cwd=.*repl-marker" "$STUB_LOG"
+    grep -q '^MCP_WORKSPACE_PATH=$' "$STUB_LOG"
+    ! grep -q "MCP_WORKSPACE_PATH=$SANDBOX/workspace" "$STUB_LOG"
+}
+
 @test "raw call returns exit 1 when mcpserver-repl emits type: error" {
     source "$LIB"
     run repl_invoke "client.SessionLog.NopeAsync" ""
@@ -273,6 +351,20 @@ model: gpt-5.4"
     grep -q "method=client.Requirements.ListFrAsync" "$STUB_LOG"
 }
 
+@test "workflow.requirements.updateFr falls back when workflow emits auth error" {
+    write_requirements_state
+    export STUB_WORKFLOW_REQUIREMENTS_AUTH_ERROR=1
+    source "$LIB"
+    run repl_invoke "workflow.requirements.updateFr" "id: FR-MCP-901
+title: Requirements shim
+description: Plugin wrapper must route update calls through typed fallback"
+    unset STUB_WORKFLOW_REQUIREMENTS_AUTH_ERROR
+    [ "$status" -eq 0 ]
+    ! echo "$output" | grep -q "Authentication required"
+    grep -q "method=workflow.requirements.updateFr" "$STUB_LOG"
+    grep -q "method=client.Requirements.UpdateFrAsync" "$STUB_LOG"
+}
+
 @test "workflow.requirements.createFr listFr getFr works through typed fallback" {
     write_requirements_state
     source "$LIB"
@@ -303,6 +395,70 @@ docType: matrix"
     echo "$output" | grep -q "Requirement Traceability Matrix"
     grep -q "method=client.Requirements.GenerateAsync" "$STUB_LOG"
     grep -q "input:     doc: mapping" "$STUB_LOG"
+    grep -q "input:     format: markdown" "$STUB_LOG"
+}
+
+@test "workflow.requirements.generateDocument returns wiki workspace export metadata through typed fallback" {
+    write_requirements_state
+    source "$LIB"
+    run repl_invoke "workflow.requirements.generateDocument" "format: wiki
+docType: all"
+    [ "$status" -eq 0 ]
+    echo "$output" | grep -q "outputRoot: /workspace/docs/Project/wiki"
+    echo "$output" | grep -q "relativePath: azure/Home.md"
+    grep -q "input:     doc: all" "$STUB_LOG"
+    grep -q "input:     format: wiki" "$STUB_LOG"
+}
+
+@test "workflow.requirements.generateDocument falls back when workflow rejects wiki format" {
+    write_requirements_state
+    export STUB_WORKFLOW_REQUIREMENTS_REJECT_WIKI=1
+    source "$LIB"
+    run repl_invoke "workflow.requirements.generateDocument" "format: wiki
+docType: all"
+    unset STUB_WORKFLOW_REQUIREMENTS_REJECT_WIKI
+    [ "$status" -eq 0 ]
+    echo "$output" | grep -q "outputRoot: /workspace/docs/Project/wiki"
+    ! echo "$output" | grep -q "Invalid format: wiki"
+    grep -q "method=workflow.requirements.generateDocument" "$STUB_LOG"
+    grep -q "method=client.Requirements.GenerateAsync" "$STUB_LOG"
+}
+
+@test "workflow.requirements.generateDocument uses HTTP fallback when REPL typed result is empty" {
+    write_requirements_state
+    export MCPSERVER_API_KEY="test-api-key"
+    export STUB_WORKFLOW_REQUIREMENTS_REJECT_WIKI=1
+    export STUB_TYPED_GENERATE_EMPTY=1
+    source "$LIB"
+    run repl_invoke "workflow.requirements.generateDocument" "format: wiki
+docType: all"
+    unset MCPSERVER_API_KEY
+    unset STUB_WORKFLOW_REQUIREMENTS_REJECT_WIKI
+    unset STUB_TYPED_GENERATE_EMPTY
+    [ "$status" -eq 0 ]
+    echo "$output" | grep -q "contentBase64: UEsDBA=="
+    echo "$output" | grep -q "contentType: application/zip"
+    echo "$output" | grep -q "fileName: requirements-wiki-documents.zip"
+}
+
+@test "workflow.requirements.ingestDocument passes wiki documents and timestamps to typed fallback" {
+    write_requirements_state
+    source "$LIB"
+    run repl_invoke "workflow.requirements.ingestDocument" "format: wiki
+sourceFormat: wiki
+preferredWikiFormat: github
+documents:
+  github/Functional-Requirements.md:
+    content: |
+      # Functional Requirements (MCP Server)
+    lastModifiedUtc: 2026-05-08T12:00:00Z"
+    [ "$status" -eq 0 ]
+    grep -q "method=client.Requirements.IngestAsync" "$STUB_LOG"
+    grep -q "input:       sourceFormat: wiki" "$STUB_LOG"
+    grep -q "input:       preferredWikiFormat: github" "$STUB_LOG"
+    grep -q "input:       documents:" "$STUB_LOG"
+    grep -q "github/Functional-Requirements.md" "$STUB_LOG"
+    grep -q "lastModifiedUtc: 2026-05-08T12:00:00Z" "$STUB_LOG"
 }
 
 @test "workflow.requirements uses session-state workspace path and base URL for mcpserver-repl" {
@@ -329,6 +485,11 @@ docType: matrix"
     unset STUB_AUTH_FAIL_WORKSPACE_PATH
     [ "$status" -eq 0 ]
     [ "$(grep -c "method=client.Requirements.ListFrAsync" "$STUB_LOG")" -eq 1 ]
-    grep -q "MCP_WORKSPACE_PATH=.*repl-marker" "$STUB_LOG"
-    ! grep -q "method=client.Requirements.ListFrAsync.*MCP_WORKSPACE_PATH=$SANDBOX/workspace" "$STUB_LOG"
+    awk '
+        /method=client.Requirements.ListFrAsync/ { capture = 1 }
+        capture && /cwd=.*repl-marker/ { saw_cwd = 1 }
+        capture && /^MCP_WORKSPACE_PATH=$/ { saw_empty_workspace_env = 1 }
+        /^---$/ { capture = 0 }
+        END { exit((saw_cwd && saw_empty_workspace_env) ? 0 : 1) }
+    ' "$STUB_LOG"
 }

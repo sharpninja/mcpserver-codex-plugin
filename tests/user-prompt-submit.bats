@@ -47,8 +47,16 @@ teardown() {
     grep -q '^status: in_progress' "$SANDBOX/cache/current-turn.yaml"
     grep -q '^turnRequestId: req-' "$SANDBOX/cache/current-turn.yaml"
 
-    if command -v python3 >/dev/null 2>&1; then
-        python3 - <<'PY' "$output"
+    json_python=""
+    for candidate in python3 python; do
+        if command -v "$candidate" >/dev/null 2>&1 && "$candidate" --version >/dev/null 2>&1; then
+            json_python="$candidate"
+            break
+        fi
+    done
+
+    if [ -n "$json_python" ]; then
+        "$json_python" - <<'PY' "$output"
 import json
 import sys
 

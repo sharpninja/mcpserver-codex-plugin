@@ -116,6 +116,11 @@ _repl_response_has_empty_result() {
     '
 }
 
+_repl_response_is_nonempty_success() {
+    local response="${1:-}"
+    ! _repl_response_is_error "$response" && ! _repl_response_has_empty_result "$response"
+}
+
 _repl_write_session_state() {
     local status="$1"
     local source_type="$2"
@@ -609,7 +614,24 @@ _repl_requirements_bootstrap_state() {
 
     local bootstrap_dir
     bootstrap_dir="$(_repl_path_for_bash "$start_dir" 2>/dev/null || printf '%s' "$start_dir")"
-    _repl_bootstrap_state "$bootstrap_dir"
+    _repl_bootstrap_state "$bootstrap_dir" || return 1
+
+    if ! declare -F find_marker_file >/dev/null 2>&1 || ! declare -F parse_marker_field >/dev/null 2>&1; then
+        # shellcheck source=./marker-resolver.sh
+        source "${REPL_INVOKE_SCRIPT_DIR}/marker-resolver.sh" || return 1
+    fi
+
+    local marker_file marker_workspace existing_workspace marker_workspace_name marker_base_url
+    marker_file="$(find_marker_file "$bootstrap_dir" 2>/dev/null || true)"
+    [ -n "$marker_file" ] || return 0
+    marker_workspace="$(_repl_unquote "$(parse_marker_field "$marker_file" "workspacePath" 2>/dev/null || true)")"
+    existing_workspace="$(_repl_unquote "$(_repl_session_state_value "workspacePath")")"
+    if [ -n "$marker_workspace" ] && [ "$existing_workspace" != "$marker_workspace" ]; then
+        marker_workspace_name="$(_repl_unquote "$(parse_marker_field "$marker_file" "workspace" 2>/dev/null || true)")"
+        marker_base_url="$(_repl_unquote "$(parse_marker_field "$marker_file" "baseUrl" 2>/dev/null || true)")"
+        [ -z "$marker_workspace_name" ] && marker_workspace_name="$(basename "$marker_workspace")"
+        _repl_write_session_state "verified" "" "" "" "" "" "" "$marker_workspace" "$marker_workspace_name" "$marker_base_url"
+    fi
 }
 
 _repl_invoke_raw_in_workspace() {
@@ -624,8 +646,9 @@ _repl_invoke_raw_in_workspace() {
         return 1
     fi
 
-    local workspace_path workspace_cwd base_url cleanup_dir
+    local workspace_path workspace_env_path workspace_cwd base_url cleanup_dir
     workspace_path="$(_repl_unquote "$(_repl_session_state_value "workspacePath")")"
+    workspace_env_path="$workspace_path"
     base_url="$(_repl_unquote "$(_repl_session_state_value "baseUrl")")"
     workspace_cwd="$(_repl_path_for_bash "$workspace_path" 2>/dev/null || printf '%s' "$(pwd)")"
     [ -z "$workspace_cwd" ] && workspace_cwd="$(pwd)"
@@ -633,7 +656,7 @@ _repl_invoke_raw_in_workspace() {
     if [ "$marker_mode" = "compat" ]; then
         cleanup_dir="$(_repl_create_compat_marker)" || return 1
         workspace_cwd="$cleanup_dir"
-        workspace_path="$(_repl_path_for_repl "$cleanup_dir" 2>/dev/null || printf '%s' "$cleanup_dir")"
+        workspace_env_path=""
     fi
 
     local envelope="type: request
@@ -653,10 +676,12 @@ ${indented_params}"
     response="$(
         printf '%s\n' "$envelope" | (
             cd "$workspace_cwd" || exit 1
-            if [ -n "$workspace_path" ]; then
-                export MCP_WORKSPACE_PATH="$workspace_path"
-                export MCP_WORKSPACE="$workspace_path"
-                export MCPSERVER_WORKSPACE_PATH="$workspace_path"
+            if [ -n "$workspace_env_path" ]; then
+                export MCP_WORKSPACE_PATH="$workspace_env_path"
+                export MCP_WORKSPACE="$workspace_env_path"
+                export MCPSERVER_WORKSPACE_PATH="$workspace_env_path"
+            else
+                unset MCP_WORKSPACE_PATH MCP_WORKSPACE MCPSERVER_WORKSPACE_PATH
             fi
             if [ -n "$base_url" ]; then
                 export MCP_SERVER_URL="$base_url"
@@ -818,7 +843,7 @@ _repl_requirements_typed_method() {
 _repl_requirements_typed_params() {
     local operation="$1"
     local params_yaml="${2:-}"
-    local id title body fr_id doc_type content
+    local id title body fr_id doc_type format content documents_block source_format preferred_wiki_format
 
     case "$operation" in
         listFr|listTr|listTest|listMappings)
@@ -887,15 +912,31 @@ _repl_requirements_typed_params() {
             ;;
         generateDocument)
             doc_type="$(_repl_requirements_typed_doc_type "$(_repl_yaml_get "$params_yaml" "docType")")"
+            format="$(_repl_yaml_get "$params_yaml" "format")"
+            [ -z "$format" ] && format="markdown"
             printf 'doc: %s\n' "$doc_type"
+            printf 'format: %s\n' "$format"
             ;;
         ingestDocument)
             content="$(_repl_param_text "$params_yaml" "content")"
+            documents_block="$(_repl_list_block_get "$params_yaml" "documents")"
+            source_format="$(_repl_yaml_get "$params_yaml" "sourceFormat")"
+            preferred_wiki_format="$(_repl_yaml_get "$params_yaml" "preferredWikiFormat")"
             printf 'request:\n'
-            _repl_yaml_field "  " "functionalMarkdown" "$content"
-            _repl_yaml_field "  " "technicalMarkdown" "$content"
-            _repl_yaml_field "  " "testingMarkdown" "$content"
-            _repl_yaml_field "  " "mappingMarkdown" "$content"
+            if [ -n "$documents_block" ]; then
+                [ -z "$source_format" ] && source_format="wiki"
+                _repl_yaml_field "  " "sourceFormat" "$source_format"
+                if [ -n "$preferred_wiki_format" ]; then
+                    _repl_yaml_field "  " "preferredWikiFormat" "$preferred_wiki_format"
+                fi
+                printf '  documents:\n'
+                printf '%s\n' "$documents_block" | sed 's/^/    /'
+            else
+                _repl_yaml_field "  " "functionalMarkdown" "$content"
+                _repl_yaml_field "  " "technicalMarkdown" "$content"
+                _repl_yaml_field "  " "testingMarkdown" "$content"
+                _repl_yaml_field "  " "mappingMarkdown" "$content"
+            fi
             ;;
         *)
             return 1
@@ -905,7 +946,7 @@ _repl_requirements_typed_params() {
 
 _repl_requirements_normalize_generate_response() {
     local response="${1:-}"
-    local request_id content_type decoded
+    local request_id content_type file_name format doc_type generated_at decoded content_base64
 
     if ! printf '%s\n' "$response" | awk '
         /^[[:space:]]*content:[[:space:]]*$/ { in_content = 1; next }
@@ -919,7 +960,46 @@ _repl_requirements_normalize_generate_response() {
 
     request_id="$(printf '%s\n' "$response" | grep '^[[:space:]]*requestId:' | head -1 | sed 's/^[[:space:]]*requestId:[[:space:]]*//')"
     content_type="$(printf '%s\n' "$response" | grep '^[[:space:]]*contentType:' | head -1 | sed 's/^[[:space:]]*contentType:[[:space:]]*//')"
+    file_name="$(printf '%s\n' "$response" | grep '^[[:space:]]*fileName:' | head -1 | sed 's/^[[:space:]]*fileName:[[:space:]]*//')"
+    format="$(printf '%s\n' "$response" | grep '^[[:space:]]*format:' | head -1 | sed 's/^[[:space:]]*format:[[:space:]]*//')"
+    doc_type="$(printf '%s\n' "$response" | grep '^[[:space:]]*docType:' | head -1 | sed 's/^[[:space:]]*docType:[[:space:]]*//')"
+    generated_at="$(printf '%s\n' "$response" | grep '^[[:space:]]*generatedAt:' | head -1 | sed 's/^[[:space:]]*generatedAt:[[:space:]]*//')"
     [ -z "$content_type" ] && content_type="text/markdown"
+
+    if printf '%s\n' "$content_type" | grep -qi 'zip' || printf '%s\n' "$file_name" | grep -qi '\.zip$'; then
+        content_base64="$(printf '%s\n' "$response" | awk '
+            /^[[:space:]]*content:[[:space:]]*$/ { in_content = 1; next }
+            in_content && /^[[:space:]]*-[[:space:]]*[0-9]+[[:space:]]*$/ {
+                value = $0
+                sub(/^[[:space:]]*-[[:space:]]*/, "", value)
+                sub(/[[:space:]]*$/, "", value)
+                print value
+                next
+            }
+            in_content && /^[^[:space:]]|^[[:space:]]*[[:alpha:]_][[:alnum:]_]*:/ { in_content = 0 }
+        ' | while IFS= read -r byte_value; do
+            printf "\\$(printf '%03o' "$byte_value")"
+        done | base64 | tr -d '\r\n')"
+
+        [ -z "$file_name" ] && file_name="requirements-documents.zip"
+        [ -z "$format" ] && format="markdown"
+        [ -z "$doc_type" ] && doc_type="all"
+        [ -z "$generated_at" ] && generated_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+        printf 'type: result\npayload:\n'
+        if [ -n "$request_id" ]; then
+            printf '  requestId: %s\n' "$request_id"
+        fi
+        printf '  result:\n'
+        printf '    contentBase64: %s\n' "$content_base64"
+        printf '    contentType: %s\n' "$content_type"
+        printf '    fileName: %s\n' "$file_name"
+        printf '    format: %s\n' "$format"
+        printf '    docType: %s\n' "$doc_type"
+        printf '    generatedAt: %s\n' "$generated_at"
+        return 0
+    fi
+
     decoded="$(printf '%s\n' "$response" | awk '
         /^[[:space:]]*content:[[:space:]]*$/ { in_content = 1; next }
         in_content && /^[[:space:]]*-[[:space:]]*[0-9]+[[:space:]]*$/ {
@@ -942,6 +1022,81 @@ _repl_requirements_normalize_generate_response() {
     printf '    content: |\n'
     printf '%s\n' "$decoded" | sed 's/^/      /'
     printf '    contentType: %s\n' "$content_type"
+    if [ -n "$format" ]; then
+        printf '    format: %s\n' "$format"
+    fi
+    if [ -n "$doc_type" ]; then
+        printf '    docType: %s\n' "$doc_type"
+    fi
+}
+
+_repl_requirements_generate_http_fallback() {
+    local params_yaml="${1:-}"
+    local format doc_type workspace_path workspace_path_bash base_url marker_file api_key
+
+    format="$(_repl_yaml_get "$params_yaml" "format")"
+    [ -z "$format" ] && format="markdown"
+    [ "$format" = "wiki" ] || return 1
+
+    if ! command -v curl >/dev/null 2>&1 || ! command -v base64 >/dev/null 2>&1; then
+        return 1
+    fi
+
+    doc_type="$(_repl_requirements_typed_doc_type "$(_repl_yaml_get "$params_yaml" "docType")")"
+    workspace_path="$(_repl_unquote "$(_repl_session_state_value "workspacePath")")"
+    base_url="${MCPSERVER_BASE_URL:-$(_repl_unquote "$(_repl_session_state_value "baseUrl")")}"
+
+    workspace_path_bash="$(_repl_path_for_bash "$workspace_path" 2>/dev/null || true)"
+    if ! declare -F find_marker_file >/dev/null 2>&1 || ! declare -F parse_marker_field >/dev/null 2>&1; then
+        # shellcheck source=./marker-resolver.sh
+        source "${REPL_INVOKE_SCRIPT_DIR}/marker-resolver.sh" || return 1
+    fi
+    marker_file=""
+    if [ -n "$workspace_path_bash" ] && declare -F find_marker_file >/dev/null 2>&1; then
+        marker_file="$(find_marker_file "$workspace_path_bash" 2>/dev/null || true)"
+    fi
+
+    api_key="${MCPSERVER_API_KEY:-$(_repl_compat_marker_field "$marker_file" "apiKey" "")}"
+    [ -z "$workspace_path" ] && workspace_path="${MCPSERVER_WORKSPACE_PATH:-$(_repl_compat_marker_field "$marker_file" "workspacePath" "")}"
+    [ -z "$base_url" ] && base_url="$(_repl_compat_marker_field "$marker_file" "baseUrl" "")"
+    [ -z "$api_key" ] && return 1
+    [ -z "$workspace_path" ] && return 1
+    [ -z "$base_url" ] && return 1
+
+    local tmp_body tmp_headers url content_type content_base64 curl_status
+    mkdir -p "$REPL_INVOKE_CACHE_DIR"
+    tmp_body="${REPL_INVOKE_CACHE_DIR}/requirements-generate.$$.$RANDOM.body"
+    tmp_headers="${REPL_INVOKE_CACHE_DIR}/requirements-generate.$$.$RANDOM.headers"
+    url="${base_url%/}/mcpserver/requirements/generate?doc=${doc_type}&format=${format}"
+
+    curl -fsSL \
+        -D "$tmp_headers" \
+        -o "$tmp_body" \
+        -H "X-Api-Key: ${api_key}" \
+        -H "X-Workspace-Path: ${workspace_path}" \
+        "$url" >/dev/null 2>&1
+    curl_status=$?
+    if [ $curl_status -ne 0 ]; then
+        rm -f "$tmp_body" "$tmp_headers"
+        return $curl_status
+    fi
+
+    content_type="$(grep -i '^content-type:' "$tmp_headers" 2>/dev/null | head -1 | sed 's/^[Cc]ontent-[Tt]ype:[[:space:]]*//' | tr -d '\r')"
+    content_type="${content_type%%;*}"
+    [ -z "$content_type" ] && content_type="application/zip"
+    content_base64="$(base64 < "$tmp_body" | tr -d '\r\n')"
+    rm -f "$tmp_body" "$tmp_headers"
+
+    printf 'type: result\npayload:\n'
+    printf '  result:\n'
+    printf '    contentBase64: %s\n' "$content_base64"
+    printf '    contentType: %s\n' "$content_type"
+    if printf '%s\n' "$content_type" | grep -qi 'zip'; then
+        printf '    fileName: requirements-wiki-documents.zip\n'
+    fi
+    printf '    format: %s\n' "$format"
+    printf '    docType: %s\n' "$doc_type"
+    printf '    generatedAt: %s\n' "$(_repl_now_iso)"
 }
 
 _repl_workflow_requirements() {
@@ -960,28 +1115,23 @@ _repl_workflow_requirements() {
     workflow_params="$(_repl_requirements_workflow_params "$operation" "$params_yaml")"
     response="$(_repl_invoke_raw_in_workspace "$method" "$workflow_params" "compat" 2>&1)"
     status=$?
-    if [ $status -eq 0 ] && ! _repl_response_has_empty_result "$response"; then
+    if [ $status -eq 0 ] && _repl_response_is_nonempty_success "$response"; then
         printf '%s\n' "$response"
         return 0
     fi
 
     response="$(_repl_invoke_raw_in_workspace "$method" "$workflow_params" 2>&1)"
     status=$?
-    if [ $status -eq 0 ]; then
+    if [ $status -eq 0 ] && ! _repl_response_is_error "$response"; then
         printf '%s\n' "$response"
         return 0
-    fi
-
-    if ! printf '%s\n' "$response" | grep -q 'method_not_found'; then
-        printf '%s\n' "$response"
-        return $status
     fi
 
     typed_method="$(_repl_requirements_typed_method "$operation")"
     typed_params="$(_repl_requirements_typed_params "$operation" "$params_yaml")"
     response="$(_repl_invoke_raw_in_workspace "$typed_method" "$typed_params" "compat" 2>&1)"
     status=$?
-    if [ $status -eq 0 ] && ! _repl_response_has_empty_result "$response"; then
+    if [ $status -eq 0 ] && _repl_response_is_nonempty_success "$response"; then
         if [ "$operation" = "generateDocument" ]; then
             _repl_requirements_normalize_generate_response "$response"
         else
@@ -992,9 +1142,21 @@ _repl_workflow_requirements() {
 
     response="$(_repl_invoke_raw_in_workspace "$typed_method" "$typed_params" 2>&1)"
     status=$?
-    if [ $status -eq 0 ] && [ "$operation" = "generateDocument" ]; then
-        _repl_requirements_normalize_generate_response "$response"
+    if [ $status -eq 0 ] && _repl_response_is_nonempty_success "$response"; then
+        if [ "$operation" = "generateDocument" ]; then
+            _repl_requirements_normalize_generate_response "$response"
+        else
+            printf '%s\n' "$response"
+        fi
         return 0
+    fi
+    if [ "$operation" = "generateDocument" ]; then
+        response="$(_repl_requirements_generate_http_fallback "$params_yaml" 2>&1)"
+        status=$?
+        if [ $status -eq 0 ] && _repl_response_is_nonempty_success "$response"; then
+            printf '%s\n' "$response"
+            return 0
+        fi
     fi
     printf '%s\n' "$response"
     return $status
@@ -1308,7 +1470,7 @@ _repl_workflow_complete_turn() {
 }
 
 _repl_workflow_query_history() {
-    _repl_invoke_raw "client.SessionLog.QueryAsync" "$1"
+    _repl_invoke_raw_in_workspace "client.SessionLog.QueryAsync" "$1" "compat"
 }
 
 _repl_workflow_todo_select() {
@@ -1450,4 +1612,4 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     exit $?
 fi
 
-export -f repl_invoke repl_build_envelope _repl_compat_marker_endpoint_field _repl_compat_marker_field _repl_create_compat_marker _repl_first_param_text _repl_invoke_raw _repl_invoke_raw_in_workspace _repl_invoke_with_fallback _repl_bootstrap_state _repl_emit_response _repl_generate_session_id _repl_normalized_actions_block _repl_normalized_dialog_items_block _repl_param_text _repl_path_for_bash _repl_path_for_repl _repl_persist_turn _repl_requirements_bootstrap_state _repl_requirements_normalize_generate_response _repl_requirements_typed_doc_type _repl_requirements_typed_method _repl_requirements_typed_params _repl_requirements_workflow_doc_type _repl_requirements_workflow_params _repl_requirement_list_field _repl_response_has_empty_result _repl_response_is_error _repl_session_meta _repl_session_state_value _repl_state_value _repl_submit_session _repl_turns_block _repl_workflow_append_actions _repl_workflow_append_dialog _repl_workflow_begin_turn _repl_workflow_bootstrap _repl_workflow_complete_turn _repl_workflow_open_session _repl_workflow_query_history _repl_workflow_requirements _repl_workflow_todo_select _repl_workflow_todo_update_selected _repl_workflow_update_turn _repl_yaml_block_get _repl_yaml_field _repl_yaml_get 2>/dev/null || true
+export -f repl_invoke repl_build_envelope _repl_compat_marker_endpoint_field _repl_compat_marker_field _repl_create_compat_marker _repl_first_param_text _repl_invoke_raw _repl_invoke_raw_in_workspace _repl_invoke_with_fallback _repl_bootstrap_state _repl_emit_response _repl_generate_session_id _repl_normalized_actions_block _repl_normalized_dialog_items_block _repl_param_text _repl_path_for_bash _repl_path_for_repl _repl_persist_turn _repl_requirements_bootstrap_state _repl_requirements_generate_http_fallback _repl_requirements_normalize_generate_response _repl_requirements_typed_doc_type _repl_requirements_typed_method _repl_requirements_typed_params _repl_requirements_workflow_doc_type _repl_requirements_workflow_params _repl_requirement_list_field _repl_response_has_empty_result _repl_response_is_error _repl_response_is_nonempty_success _repl_session_meta _repl_session_state_value _repl_state_value _repl_submit_session _repl_turns_block _repl_workflow_append_actions _repl_workflow_append_dialog _repl_workflow_begin_turn _repl_workflow_bootstrap _repl_workflow_complete_turn _repl_workflow_open_session _repl_workflow_query_history _repl_workflow_requirements _repl_workflow_todo_select _repl_workflow_todo_update_selected _repl_workflow_update_turn _repl_yaml_block_get _repl_yaml_field _repl_yaml_get 2>/dev/null || true

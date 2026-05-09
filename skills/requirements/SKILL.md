@@ -24,7 +24,7 @@ This is idempotent and should be called once per conversation context.
 
 To manage functional requirements (FR), technical requirements (TR), test requirements (TEST), and their traceability mappings, use this Codex plugin's `lib/repl-invoke.sh` wrapper for the `workflow.requirements.*` namespace. Do not substitute raw REST calls, generic `mcpserver-repl --agent-stdio`, helper modules, or another agent's plugin for normal requirements work.
 
-The database is the source of truth for requirements. Markdown files are import/export projections only. Every operation is scoped to the workspace resolved from the signed marker, and generated Markdown or ZIP output must contain only the requested workspace's FR, TR, TEST, and traceability links.
+The database is the source of truth for requirements. Markdown files are import/export projections only. Every operation is scoped to the workspace resolved from the signed marker, and generated workspace output must contain only the requested workspace's FR, TR, TEST, and traceability links.
 
 ## Requirement ID Conventions
 
@@ -302,6 +302,7 @@ Valid `docType` values:
 - `technical` — numbered list of all TR entries grouped by area/subarea
 - `testing` — numbered list of all TEST entries with linked FR IDs
 - `matrix` — traceability matrix table: FR × TR × TEST × status
+- `all` — complete export package
 
 ```yaml
 type: result
@@ -320,7 +321,37 @@ payload:
     generatedAt: 2026-04-09T12:00:14Z
 ```
 
-## Bulk Ingestion from Markdown
+### Wiki Export
+
+Use `format: wiki` with `docType: all` to export wiki files directly into the workspace. The normal result returns metadata, not archive bytes. Files are written under `docs/Project/wiki/azure` and `docs/Project/wiki/github`. Each folder includes `.mcp-requirements-manifest.json`; Azure also includes `.order`; GitHub also includes `_Sidebar.md` and `_Footer.md`. When an older REPL cannot serialize the metadata result, the wrapper may return `contentBase64` with `contentType: application/json`; decode it to read the same export metadata.
+
+```yaml
+type: request
+payload:
+  requestId: req-20260409T120014Z-gendoc-wiki-001
+  method: workflow.requirements.generateDocument
+  params:
+    format: wiki
+    docType: all
+```
+
+```yaml
+type: result
+payload:
+  requestId: req-20260409T120014Z-gendoc-wiki-001
+  result:
+    format: wiki
+    docType: all
+    generatedAtUtc: 2026-04-09T12:00:14Z
+    outputRoot: F:\GitHub\McpServer\docs\Project\wiki
+    files:
+      - relativePath: azure/Home.md
+        fullPath: F:\GitHub\McpServer\docs\Project\wiki\azure\Home.md
+        contentType: text/markdown
+        lastModifiedUtc: 2026-04-09T12:00:14Z
+```
+
+## Bulk Ingestion
 
 To import requirements from an existing Markdown document:
 
@@ -341,7 +372,28 @@ payload:
     format: markdown
 ```
 
-The server parses the document, creates or updates matching FR/TR/TEST records, and returns a summary of entities created versus skipped:
+To import wiki documents, pass a path-keyed `documents` map and include `lastModifiedUtc` per entry when available. Use `sourceFormat: auto` or `wiki`; set `preferredWikiFormat: azure|github` only when the Azure and GitHub timestamp checks disagree. The server compares both `.mcp-requirements-manifest.json` `generatedAtUtc` values and the latest `lastModifiedUtc` per platform. If both checks agree, the newer platform is selected. If they disagree and no preference is supplied, import fails. The selected platform folder is authoritative: missing records are deleted, changed records are updated, new records are created, and identical records are ignored.
+
+```yaml
+type: request
+payload:
+  requestId: req-20260409T120015Z-ingest-wiki-001
+  method: workflow.requirements.ingestDocument
+  params:
+    format: wiki
+    sourceFormat: wiki
+    preferredWikiFormat: github
+    documents:
+      github/.mcp-requirements-manifest.json:
+        content: '{"generatedAtUtc":"2026-04-09T12:00:14Z"}'
+        lastModifiedUtc: 2026-04-09T12:00:14Z
+      github/Functional-Requirements.md:
+        content: |
+          # Functional Requirements (MCP Server)
+        lastModifiedUtc: 2026-04-09T12:00:15Z
+```
+
+The server parses the document, creates, updates, deletes, or ignores matching FR/TR/TEST/mapping records, and returns a summary:
 
 ```yaml
 type: result
