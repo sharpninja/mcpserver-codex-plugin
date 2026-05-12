@@ -13,6 +13,7 @@ source "$PLUGIN_ROOT/tests/cache-scope-helper.bash"
 setup() {
     SANDBOX="$(mktemp -d)"
     mkdir -p "$SANDBOX/bin" "$SANDBOX/workspace"
+    export REPL_TIMEOUT=5
     export STUB_LOG="$SANDBOX/repl-calls.log"
     export STUB_DB="$SANDBOX/requirements-fr.db"
 

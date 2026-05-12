@@ -18,9 +18,30 @@ source "$PLUGIN_ROOT/tests/cache-scope-helper.bash"
 
 setup() {
     SANDBOX="$(mktemp -d)"
-    mkdir -p "$SANDBOX/workspace"
+    mkdir -p "$SANDBOX/bin" "$SANDBOX/workspace"
     init_test_cache "$SANDBOX/workspace" "Codex-20260419T000000Z-stop"
 
+    cat > "$SANDBOX/bin/mcpserver-repl" <<'EOF'
+#!/usr/bin/env bash
+cat >/dev/null 2>&1 || true
+printf 'type: response\npayload:\n  ok: true\n'
+EOF
+    chmod +x "$SANDBOX/bin/mcpserver-repl"
+
+    cat > "$SANDBOX/bin/pwsh.exe" <<'EOF'
+#!/usr/bin/env bash
+printf '0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF\n'
+EOF
+    chmod +x "$SANDBOX/bin/pwsh.exe"
+
+    cat > "$SANDBOX/bin/powershell.exe" <<'EOF'
+#!/usr/bin/env bash
+printf '0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF\n'
+EOF
+    chmod +x "$SANDBOX/bin/powershell.exe"
+
+    export PATH="$SANDBOX/bin:$PATH"
+    export REPL_TIMEOUT=1
     export CODEX_PLUGIN_ROOT="$PLUGIN_ROOT"
     export PLUGIN_ROOT_OVERRIDE="$SANDBOX"
     unset CLAUDE_STOP_HOOK_ACTIVE
@@ -44,19 +65,21 @@ EOF
 }
 
 run_stop_gate() {
-    bash "$STOP_GATE" </dev/null 2>/dev/null
+    run bash "$STOP_GATE"
 }
 
 @test "no turn file → no-turn status" {
     rm -f "$(test_cache_file current-turn.yaml)"
-    out="$(run_stop_gate)"
-    echo "$out" | grep -qF '"status":"no-turn"'
+    run_stop_gate
+    [ "$status" -eq 0 ]
+    grep -qF '"status":"no-turn"' <<<"$output"
 }
 
 @test "in_progress turn self-heals to passed when repl-invoke is available" {
     write_turn "in_progress"
-    out="$(run_stop_gate)"
-    echo "$out" | grep -qF '"status":"passed"'
+    run_stop_gate
+    [ "$status" -eq 0 ]
+    grep -qF '"status":"passed"' <<<"$output"
 }
 
 @test "in_progress turn blocks when repl-invoke cannot be loaded" {
@@ -69,37 +92,42 @@ codeEdits: 0
 lastBuildStatus: unknown
 EOF
     export CODEX_PLUGIN_ROOT="$SANDBOX/missing-plugin-root"
-    out="$(run_stop_gate)"
+    run_stop_gate
     export CODEX_PLUGIN_ROOT="$PLUGIN_ROOT"
-    echo "$out" | grep -qF '"decision":"block"'
-    echo "$out" | grep -qF "req-test-stop-001"
+    [ "$status" -eq 0 ]
+    grep -qF '"decision":"block"' <<<"$output"
+    grep -qF "req-test-stop-001" <<<"$output"
 }
 
 @test "completed turn (clean build) → status:passed" {
     write_turn "completed"
-    out="$(run_stop_gate)"
-    echo "$out" | grep -qF '"status":"passed"'
+    run_stop_gate
+    [ "$status" -eq 0 ]
+    grep -qF '"status":"passed"' <<<"$output"
 }
 
 @test "completed turn with failed build + edits → decision:block" {
     write_turn "completed" 3 "failed"
-    out="$(run_stop_gate)"
-    echo "$out" | grep -qF '"decision":"block"'
-    echo "$out" | grep -qF "code edit"
+    run_stop_gate
+    [ "$status" -eq 0 ]
+    grep -qF '"decision":"block"' <<<"$output"
+    grep -qF "code edit" <<<"$output"
 }
 
 @test "accept-failure marker unblocks failed-build stop" {
     write_turn "completed" 3 "failed"
     touch "$(test_cache_file turn-accept-failure.marker)"
-    out="$(run_stop_gate)"
-    echo "$out" | grep -qF '"status":"passed"'
+    run_stop_gate
+    [ "$status" -eq 0 ]
+    grep -qF '"status":"passed"' <<<"$output"
 }
 
 @test "accept-failure marker is consumed (deleted) after use" {
     write_turn "completed" 3 "failed"
     marker_file="$(test_cache_file turn-accept-failure.marker)"
     touch "$marker_file"
-    run_stop_gate >/dev/null
+    run_stop_gate
+    [ "$status" -eq 0 ]
     [ ! -f "$marker_file" ]
 }
 
@@ -123,14 +151,16 @@ response: |
     status_after="$(grep '^status:' "$(test_cache_file current-turn.yaml)" | head -1 | sed 's/^status:[[:space:]]*//')"
     [ "$status_after" = "completed" ]
 
-    out="$(run_stop_gate)"
-    echo "$out" | grep -qF '"status":"passed"'
+    run_stop_gate
+    [ "$status" -eq 0 ]
+    grep -qF '"status":"passed"' <<<"$output"
 }
 
 @test "CLAUDE_STOP_HOOK_ACTIVE=true short-circuits to already-reprompted" {
     write_turn "in_progress"
     export CLAUDE_STOP_HOOK_ACTIVE=true
-    out="$(run_stop_gate)"
+    run_stop_gate
     unset CLAUDE_STOP_HOOK_ACTIVE
-    echo "$out" | grep -qF '"status":"already-reprompted"'
+    [ "$status" -eq 0 ]
+    grep -qF '"status":"already-reprompted"' <<<"$output"
 }

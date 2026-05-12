@@ -7,6 +7,7 @@ source "$PLUGIN_ROOT/tests/cache-scope-helper.bash"
 setup() {
     SANDBOX="$(mktemp -d)"
     mkdir -p "$SANDBOX/cache" "$SANDBOX/bin" "$SANDBOX/workspace"
+    export REPL_TIMEOUT=1
 
     cat > "$SANDBOX/workspace/AGENTS-README-FIRST.yaml" <<'EOF'
 apiKey: test-api-key
@@ -41,9 +42,22 @@ EOF
 
     cat > "$SANDBOX/bin/mcpserver-repl" <<'EOF'
 #!/usr/bin/env bash
+cat >/dev/null 2>&1 || true
 printf 'type: response\npayload:\n  ok: true\n'
 EOF
     chmod +x "$SANDBOX/bin/mcpserver-repl"
+
+    cat > "$SANDBOX/bin/pwsh.exe" <<'EOF'
+#!/usr/bin/env bash
+printf '0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF\n'
+EOF
+    chmod +x "$SANDBOX/bin/pwsh.exe"
+
+    cat > "$SANDBOX/bin/powershell.exe" <<'EOF'
+#!/usr/bin/env bash
+printf '0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF\n'
+EOF
+    chmod +x "$SANDBOX/bin/powershell.exe"
 
     export PATH="$SANDBOX/bin:$PATH"
     export PLUGIN_ROOT_OVERRIDE="$SANDBOX"

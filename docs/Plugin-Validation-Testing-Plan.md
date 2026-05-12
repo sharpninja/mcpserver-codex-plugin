@@ -1176,10 +1176,20 @@ Conclusion:
 
 ## Immediate Next Steps
 
-1. Add the missing manifest/static validation tests to Codex first.
-2. Stabilize the full Codex Bats suite so existing requirements tests do not hang.
-3. Extract shared marker and fake REPL fixtures from Codex tests.
-4. Port the auth-sensitive `queryHistory` regression to Claude Code and Copilot.
-5. Add the equivalent Cline Jest regression around `src/transport/repl-bridge.ts` and `src/tools/session-shim.ts`.
-6. Build the cross-plugin harness and run the parity scenario against all four local repos.
-7. Only after automated parity passes, run manual host integration validation.
+Completed on 2026-05-12:
+
+1. Added local Codex manifest/static validation coverage in `tests/manifest.bats`.
+2. Updated `.agents/plugins/marketplace.json` to the Codex marketplace contract.
+3. Registered the local Codex marketplace with `codex plugin marketplace add F:\GitHub\mcpserver-codex-plugin`.
+4. Switched the local Codex config from the Claude-backed `mcpserver@mcpserver-local` plugin entry to `mcpserver@mcpserver-codex-plugin`.
+5. Stabilized the current Codex Bats suite under Git Bash with host-tool stubs and bounded `REPL_TIMEOUT` values.
+6. Validated `bash -n setup.sh lib/*.sh` and the 45-test Bats suite.
+
+Remaining next steps:
+
+1. Restart Codex so the newly enabled `mcpserver@mcpserver-codex-plugin` entry is loaded in a fresh session.
+2. Extract shared marker and fake REPL fixtures from Codex tests.
+3. Port the auth-sensitive `queryHistory` regression to Claude Code and Copilot.
+4. Add the equivalent Cline Jest regression around `src/transport/repl-bridge.ts` and `src/tools/session-shim.ts`.
+5. Build the cross-plugin harness and run the parity scenario against all four local repos.
+6. Only after automated parity passes, run manual host integration validation.
