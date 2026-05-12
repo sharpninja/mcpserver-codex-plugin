@@ -8,10 +8,11 @@
 
 PLUGIN_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 LIB="$PLUGIN_ROOT/lib/repl-invoke.sh"
+source "$PLUGIN_ROOT/tests/cache-scope-helper.bash"
 
 setup() {
     SANDBOX="$(mktemp -d)"
-    mkdir -p "$SANDBOX/cache" "$SANDBOX/bin" "$SANDBOX/workspace"
+    mkdir -p "$SANDBOX/bin" "$SANDBOX/workspace"
     export STUB_LOG="$SANDBOX/repl-calls.log"
     export STUB_DB="$SANDBOX/requirements-fr.db"
 
@@ -139,7 +140,23 @@ exit 0
 STUB
     chmod +x "$SANDBOX/bin/curl"
 
-    cat > "$SANDBOX/cache/session-state.yaml" <<EOF
+    cat > "$SANDBOX/bin/pwsh.exe" <<'STUB'
+#!/usr/bin/env bash
+exit 0
+STUB
+    chmod +x "$SANDBOX/bin/pwsh.exe"
+
+    cat > "$SANDBOX/bin/powershell.exe" <<'STUB'
+#!/usr/bin/env bash
+exit 0
+STUB
+    chmod +x "$SANDBOX/bin/powershell.exe"
+
+    export PATH="$SANDBOX/bin:$PATH"
+    export PLUGIN_ROOT_OVERRIDE="$SANDBOX"
+    init_test_cache "$SANDBOX/workspace" "ClaudeCode-20260419T000000Z-test"
+
+    cat > "$TEST_CACHE_DIR/session-state.yaml" <<EOF
 status: verified
 sessionId: ClaudeCode-20260419T000000Z-test
 sourceType: ClaudeCode
@@ -152,9 +169,6 @@ workspace: "test"
 baseUrl: "http://localhost:1"
 timestamp: "2026-04-19T00:00:00Z"
 EOF
-
-    export PATH="$SANDBOX/bin:$PATH"
-    export PLUGIN_ROOT_OVERRIDE="$SANDBOX"
 }
 
 teardown() {
@@ -163,7 +177,8 @@ teardown() {
 
 write_turn() {
     local status="${1:-in_progress}" edits="${2:-0}" build="${3:-unknown}"
-    cat > "$SANDBOX/cache/current-turn.yaml" <<EOF
+    refresh_test_cache
+    cat > "$TEST_CACHE_DIR/current-turn.yaml" <<EOF
 turnRequestId: req-test-shim-001
 queryTitle: Shim test
 openedAt: 2026-04-19T00:00:00Z
@@ -174,15 +189,16 @@ EOF
 }
 
 read_status() {
-    grep '^status:' "$SANDBOX/cache/current-turn.yaml" | head -1 | sed 's/^status:[[:space:]]*//'
+    grep '^status:' "$(test_cache_file current-turn.yaml)" | head -1 | sed 's/^status:[[:space:]]*//'
 }
 
 read_edits() {
-    grep '^codeEdits:' "$SANDBOX/cache/current-turn.yaml" | head -1 | sed 's/^codeEdits:[[:space:]]*//'
+    grep '^codeEdits:' "$(test_cache_file current-turn.yaml)" | head -1 | sed 's/^codeEdits:[[:space:]]*//'
 }
 
 write_requirements_state() {
-    cat > "$SANDBOX/cache/session-state.yaml" <<EOF
+    refresh_test_cache
+    cat > "$TEST_CACHE_DIR/session-state.yaml" <<EOF
 status: verified
 sessionId: Codex-20260419T000000Z-test
 sourceType: Codex
@@ -216,7 +232,7 @@ response: |
 }
 
 @test "completeTurn no-ops gracefully when current-turn.yaml is missing" {
-    rm -f "$SANDBOX/cache/current-turn.yaml"
+    rm -f "$(test_cache_file current-turn.yaml)"
     source "$LIB"
     run repl_invoke "workflow.sessionlog.completeTurn" "response: x"
     [ "$status" -eq 0 ]
@@ -256,19 +272,20 @@ response: |
 
 @test "beginTurn creates current-turn.yaml when called directly" {
     source "$LIB"
-    rm -f "$SANDBOX/cache/current-turn.yaml"
+    rm -f "$(test_cache_file current-turn.yaml)"
     run repl_invoke "workflow.sessionlog.beginTurn" "requestId: req-test-begin-001
 queryTitle: Direct begin
 queryText: |
   Start work now."
     [ "$status" -eq 0 ]
-    grep -q '^turnRequestId: req-test-begin-001' "$SANDBOX/cache/current-turn.yaml"
-    grep -q '^status: in_progress' "$SANDBOX/cache/current-turn.yaml"
+    turn_file="$(test_cache_file current-turn.yaml)"
+    grep -q '^turnRequestId: req-test-begin-001' "$turn_file"
+    grep -q '^status: in_progress' "$turn_file"
 }
 
 @test "openSession populates missing session metadata" {
     source "$LIB"
-    cat > "$SANDBOX/cache/session-state.yaml" <<EOF
+    cat > "$(test_cache_file session-state.yaml)" <<EOF
 status: verified
 workspacePath: "/tmp/ws"
 workspace: "test"
@@ -279,9 +296,10 @@ EOF
 title: Fix the plugin
 model: gpt-5.4"
     [ "$status" -eq 0 ]
-    grep -q '^sessionId: Codex-' "$SANDBOX/cache/session-state.yaml"
-    grep -q '^sourceType: Codex' "$SANDBOX/cache/session-state.yaml"
-    grep -q '^title: Fix the plugin' "$SANDBOX/cache/session-state.yaml"
+    session_file="$(test_cache_file session-state.yaml)"
+    grep -q '^sessionId: Codex-' "$session_file"
+    grep -q '^sourceType: Codex' "$session_file"
+    grep -q '^title: Fix the plugin' "$session_file"
 }
 
 @test "raw client.SessionLog.QueryAsync passes through to mcpserver-repl" {

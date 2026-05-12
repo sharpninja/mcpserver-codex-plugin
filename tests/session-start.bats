@@ -2,6 +2,7 @@
 
 PLUGIN_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 SESSION_START="$PLUGIN_ROOT/lib/session-start.sh"
+source "$PLUGIN_ROOT/tests/cache-scope-helper.bash"
 
 setup() {
     SANDBOX="$(mktemp -d)"
@@ -60,7 +61,9 @@ teardown() {
     run bash "$SESSION_START" "$SANDBOX/workspace"
     [ "$status" -eq 0 ]
     grep -q '"status":"verified"' <<<"$output"
-    grep -q '^status: verified' "$SANDBOX/cache/session-state.yaml"
-    grep -q '^sessionId: Codex-' "$SANDBOX/cache/session-state.yaml"
-    grep -q '^sourceType: Codex' "$SANDBOX/cache/session-state.yaml"
+    session_file="$(find "$SANDBOX/cache/workspaces" -path '*/sessions/*/session-state.yaml' | head -1)"
+    [ -n "$session_file" ]
+    grep -q '^status: verified' "$session_file"
+    grep -q '^sessionId: Codex-' "$session_file"
+    grep -q '^sourceType: Codex' "$session_file"
 }

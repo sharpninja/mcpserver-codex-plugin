@@ -2,12 +2,14 @@
 
 PLUGIN_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 CODE_VERIFY="$PLUGIN_ROOT/lib/code-verify.sh"
+source "$PLUGIN_ROOT/tests/cache-scope-helper.bash"
 
 setup() {
     SANDBOX="$(mktemp -d)"
-    mkdir -p "$SANDBOX/cache" "$SANDBOX/bin" "$SANDBOX/project"
+    mkdir -p "$SANDBOX/bin" "$SANDBOX/project"
+    init_test_cache "$SANDBOX/project" "Codex-20260419T000000Z-code-verify"
 
-    cat > "$SANDBOX/cache/current-turn.yaml" <<EOF
+    cat > "$TEST_CACHE_DIR/current-turn.yaml" <<EOF
 turnRequestId: req-test-code-verify-001
 queryTitle: Code verify test
 openedAt: 2026-04-19T00:00:00Z
@@ -51,6 +53,7 @@ teardown() {
     payload="{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$SANDBOX/project/Test.cs\"}}"
     run bash "$CODE_VERIFY" <<<"$payload"
     [ "$status" -eq 0 ]
-    grep -q '^codeEdits: 1' "$SANDBOX/cache/current-turn.yaml"
-    grep -q '^lastBuildStatus: succeeded' "$SANDBOX/cache/current-turn.yaml"
+    turn_file="$(test_cache_file current-turn.yaml)"
+    grep -q '^codeEdits: 1' "$turn_file"
+    grep -q '^lastBuildStatus: succeeded' "$turn_file"
 }

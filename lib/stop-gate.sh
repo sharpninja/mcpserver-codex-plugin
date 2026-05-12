@@ -16,7 +16,14 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CODEX_PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
-CACHE_DIR="${PLUGIN_ROOT_OVERRIDE:-$CODEX_PLUGIN_ROOT}/cache"
+
+if [ -f "$CODEX_PLUGIN_ROOT/lib/cache-scope.sh" ]; then
+    # shellcheck source=./cache-scope.sh
+    source "$CODEX_PLUGIN_ROOT/lib/cache-scope.sh"
+    cache_scope_init "$CODEX_PLUGIN_ROOT" "$PWD"
+else
+    CACHE_DIR="${PLUGIN_ROOT_OVERRIDE:-$CODEX_PLUGIN_ROOT}/cache"
+fi
 TURN_FILE="$CACHE_DIR/current-turn.yaml"
 
 # Read stdin (may be empty) so the hook runtime doesn't complain about an unread pipe.
@@ -67,7 +74,7 @@ fi
 
 # Gate 2 — build broken after a code edit.
 if [ "$CODE_EDITS" -gt 0 ] && [ "$BUILD_STATUS" = "failed" ]; then
-    REASON="Last build in this turn failed after ${CODE_EDITS} code edit(s). Fix the build errors before claiming done, or explicitly accept failure by writing cache/turn-accept-failure.marker."
+    REASON="Last build in this turn failed after ${CODE_EDITS} code edit(s). Fix the build errors before claiming done, or explicitly accept failure by writing the scoped turn-accept-failure.marker."
     if [ -f "$CACHE_DIR/turn-accept-failure.marker" ]; then
         rm -f "$CACHE_DIR/turn-accept-failure.marker"
     else

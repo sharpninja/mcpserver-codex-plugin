@@ -11,7 +11,8 @@ protocol in three scripts located in the plugin's `lib/` directory.
 
 Run `bash ${CODEX_PLUGIN_ROOT}/lib/session-start.sh <workspace-path>` once per
 workspace before Phase 1, or let `user-prompt-submit.sh` auto-bootstrap the
-session cache on first use.
+session cache on first use. Runtime state is scoped under
+`cache/workspaces/<workspace-key>/sessions/<session-key>/`.
 
 **Every user message MUST flow through these three phases.** If you skip any
 phase your session log is incomplete and the workspace's AGENTS-README-FIRST
@@ -26,11 +27,11 @@ echo '{"prompt":"<verbatim user message>"}' | bash ${CODEX_PLUGIN_ROOT}/lib/user
 ```
 
 The script:
-- Auto-bootstraps `cache/session-state.yaml` when the marker file is trusted
-- Reads `cache/session-state.yaml` for the active `sessionId`
+- Auto-bootstraps scoped `session-state.yaml` when the marker file is trusted
+- Reads scoped `session-state.yaml` for the active `sessionId`
 - Builds a fresh `requestId` of the form `req-<yyyyMMddTHHmmssZ>-prompt-xxxx`
 - Calls `workflow.sessionlog.beginTurn` with the prompt as `queryText`
-- Writes `cache/current-turn.yaml` with `turnRequestId`, `codeEdits: 0`,
+- Writes scoped `current-turn.yaml` with `turnRequestId`, `codeEdits: 0`,
   `lastBuildStatus: unknown`, `status: in_progress`
 - Emits a reminder via `additionalContext` that Phases 2 and 3 are mandatory
 
@@ -52,7 +53,7 @@ The script:
 - Locates the nearest project file (`.csproj` / `package.json`)
 - Runs the matching build command (`dotnet build` or `tsc --noEmit`)
 - Parses the output and writes the status (`succeeded` / `failed`) to
-  `cache/current-turn.yaml` under `lastBuildStatus`
+  scoped `current-turn.yaml` under `lastBuildStatus`
 - Records the code edit count via `workflow.sessionlog.appendActions`
 - Appends a `workflow.sessionlog.appendActions` entry
 - If the build failed, its stdout contains the first 10 errors; those
@@ -69,7 +70,7 @@ Before emitting your response to the user, invoke:
 bash ${CODEX_PLUGIN_ROOT}/lib/stop-gate.sh
 ```
 
-The script checks `cache/current-turn.yaml` and returns `decision: block`
+The script checks scoped `current-turn.yaml` and returns `decision: block`
 with a reason in any of these cases:
 - `status: in_progress` — you forgot to call `workflow.sessionlog.completeTurn`
 - `codeEdits > 0 && lastBuildStatus = failed` — build is broken
@@ -90,7 +91,7 @@ payload:
 Then re-run `stop-gate.sh`. Repeat until it returns `status: passed`.
 
 If the build is intentionally left broken (rare), touch
-`cache/turn-accept-failure.marker` *before* the next `stop-gate.sh` call;
+scoped `turn-accept-failure.marker` *before* the next `stop-gate.sh` call;
 the script consumes the marker on its next pass.
 
 ## Contract
@@ -107,9 +108,9 @@ invoke the missing phase as soon as you notice; partial compliance beats none.
 ## Integration With Your Workflow
 
 The three scripts are idempotent for the lifetime of one turn. They read
-and update `cache/current-turn.yaml` which is created in Phase 1 and
-consumed by Phase 3. `cache/` is the source of truth for turn state —
-never infer turn status from memory or conversation.
+and update the current session's scoped `current-turn.yaml` which is created
+in Phase 1 and consumed by Phase 3. The scoped cache is the source of truth
+for turn state — never infer turn status from memory or conversation.
 
 ## See Also
 

@@ -4,8 +4,8 @@
 # Runs on every user prompt. Auto-opens a session log turn via
 # workflow.sessionlog.beginTurn so agents cannot skip the Per-User-Message
 # protocol required by AGENTS-README-FIRST.yaml. Writes the active turn's
-# requestId to cache/current-turn.yaml so the Stop hook can verify the turn
-# was completed before the response finalizes.
+# requestId to the scoped current-turn.yaml so the Stop hook can verify the
+# turn was completed before the response finalizes.
 #
 # Input (stdin): Codex UserPromptSubmit payload as JSON with at least:
 #   { "prompt": "<user message>", "session_id": "...", ... }
@@ -16,7 +16,10 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CODEX_PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
-CACHE_DIR="${PLUGIN_ROOT_OVERRIDE:-$CODEX_PLUGIN_ROOT}/cache"
+
+# shellcheck source=./cache-scope.sh
+source "$CODEX_PLUGIN_ROOT/lib/cache-scope.sh"
+cache_scope_init "$CODEX_PLUGIN_ROOT" "$PWD"
 
 # Source libraries
 if ! type repl_invoke >/dev/null 2>&1; then
@@ -45,6 +48,7 @@ if [ ! -f "$CACHE_DIR/session-state.yaml" ] || [ -z "$(grep '^sessionId:' "$CACH
         MCP_SESSION_AGENT="${MCP_SESSION_AGENT:-Codex}" \
         MCP_SESSION_MODEL="${MCP_SESSION_MODEL:-codex}" \
             bash "$CODEX_PLUGIN_ROOT/lib/session-start.sh" "$PWD" >/dev/null 2>&1 || true
+        cache_scope_init "$CODEX_PLUGIN_ROOT" "$PWD"
     fi
 fi
 

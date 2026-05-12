@@ -2,12 +2,14 @@
 
 PLUGIN_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 USER_PROMPT_SUBMIT="$PLUGIN_ROOT/lib/user-prompt-submit.sh"
+source "$PLUGIN_ROOT/tests/cache-scope-helper.bash"
 
 setup() {
     SANDBOX="$(mktemp -d)"
-    mkdir -p "$SANDBOX/cache" "$SANDBOX/bin"
+    mkdir -p "$SANDBOX/bin" "$SANDBOX/workspace"
+    init_test_cache "$SANDBOX/workspace" "Codex-20260423T000000Z-test"
 
-    cat > "$SANDBOX/cache/session-state.yaml" <<'EOF'
+    cat > "$TEST_CACHE_DIR/session-state.yaml" <<'EOF'
 status: verified
 sessionId: Codex-20260423T000000Z-test
 sourceType: Codex
@@ -43,9 +45,10 @@ teardown() {
 
     [ "$status" -eq 0 ]
     grep -q '"status":"turn-opened"' <<<"$output"
-    [ -f "$SANDBOX/cache/current-turn.yaml" ]
-    grep -q '^status: in_progress' "$SANDBOX/cache/current-turn.yaml"
-    grep -q '^turnRequestId: req-' "$SANDBOX/cache/current-turn.yaml"
+    turn_file="$(test_cache_file current-turn.yaml)"
+    [ -f "$turn_file" ]
+    grep -q '^status: in_progress' "$turn_file"
+    grep -q '^turnRequestId: req-' "$turn_file"
 
     json_python=""
     for candidate in python3 python; do

@@ -6,8 +6,10 @@ set -euo pipefail
 
 CACHE_MANAGER_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CACHE_MANAGER_PLUGIN_ROOT="${PLUGIN_ROOT_OVERRIDE:-$(cd "$CACHE_MANAGER_SCRIPT_DIR/.." && pwd)}"
-CACHE_DIR="${CACHE_MANAGER_PLUGIN_ROOT}/cache"
-PENDING_DIR="${CACHE_DIR}/pending"
+
+# shellcheck source=./cache-scope.sh
+source "$CACHE_MANAGER_SCRIPT_DIR/cache-scope.sh"
+cache_scope_init "$CACHE_MANAGER_PLUGIN_ROOT" "$(pwd)"
 MAX_RETRIES=3
 
 _ensure_cache_dirs() {
@@ -15,7 +17,7 @@ _ensure_cache_dirs() {
 }
 
 # cache_write <method> [params_yaml]
-# Saves a pending REPL command as a YAML file in cache/pending/
+# Saves a pending REPL command as a YAML file in the scoped cache pending dir.
 # Outputs the path to the created file
 cache_write() {
     local method="$1"

@@ -3,8 +3,11 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CODEX_PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
-CACHE_DIR="${PLUGIN_ROOT_OVERRIDE:-$CODEX_PLUGIN_ROOT}/cache"
 START_DIR="${1:-$(pwd)}"
+
+# shellcheck source=./cache-scope.sh
+source "$CODEX_PLUGIN_ROOT/lib/cache-scope.sh"
+cache_scope_init "$CODEX_PLUGIN_ROOT" "$START_DIR"
 
 # shellcheck source=./repl-invoke.sh
 source "$CODEX_PLUGIN_ROOT/lib/repl-invoke.sh"

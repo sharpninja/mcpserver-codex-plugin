@@ -4,8 +4,8 @@
 # Runs after every Write/Edit. If the edited file is a buildable source file
 # (.cs / .axaml / .csproj / .vbproj / .fsproj / .ts / .tsx), locates the
 # nearest project/solution and runs a verification command. Injects build
-# errors as additionalContext so Claude sees them, and updates cache/current-turn.yaml
-# with lastBuildStatus so the Stop hook can gate finalization.
+# errors as additionalContext so Claude sees them, and updates the scoped
+# current-turn.yaml with lastBuildStatus so the Stop hook can gate finalization.
 #
 # Also appends a session log action via workflow.sessionlog.appendActions so
 # the edit is part of the turn's action record.
@@ -16,7 +16,10 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CODEX_PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
-CACHE_DIR="${PLUGIN_ROOT_OVERRIDE:-$CODEX_PLUGIN_ROOT}/cache"
+
+# shellcheck source=./cache-scope.sh
+source "$CODEX_PLUGIN_ROOT/lib/cache-scope.sh"
+cache_scope_init "$CODEX_PLUGIN_ROOT" "$PWD"
 TURN_FILE="$CACHE_DIR/current-turn.yaml"
 
 # Source libraries best-effort

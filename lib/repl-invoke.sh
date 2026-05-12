@@ -11,6 +11,10 @@ REPL_INVOKE_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPL_INVOKE_PLUGIN_ROOT="${PLUGIN_ROOT_OVERRIDE:-$(cd "$REPL_INVOKE_SCRIPT_DIR/.." && pwd)}"
 REPL_INVOKE_CACHE_DIR="${REPL_INVOKE_PLUGIN_ROOT}/cache"
 
+# shellcheck source=./cache-scope.sh
+source "${REPL_INVOKE_SCRIPT_DIR}/cache-scope.sh"
+cache_scope_init "$REPL_INVOKE_PLUGIN_ROOT" "$(pwd)"
+
 _repl_now_iso() {
     date -u +%Y-%m-%dT%H:%M:%SZ
 }
@@ -143,6 +147,13 @@ _repl_write_session_state() {
     workspace="$(_repl_unquote "$workspace")"
     base_url="$(_repl_unquote "$base_url")"
 
+    if declare -F cache_scope_init >/dev/null 2>&1; then
+        cache_scope_init "$REPL_INVOKE_PLUGIN_ROOT" "${workspace_path:-$(pwd)}"
+        if [ -n "$session_id" ]; then
+            cache_scope_select_session "$session_id"
+        fi
+    fi
+
     mkdir -p "$REPL_INVOKE_CACHE_DIR"
     local session_file="${REPL_INVOKE_CACHE_DIR}/session-state.yaml"
     local tmp="${session_file}.tmp.$$"
@@ -179,6 +190,9 @@ EOF
 
 _repl_bootstrap_state() {
     local start_dir="${1:-$(pwd)}"
+    if declare -F cache_scope_init >/dev/null 2>&1; then
+        cache_scope_init "$REPL_INVOKE_PLUGIN_ROOT" "$start_dir"
+    fi
     local session_file="${REPL_INVOKE_CACHE_DIR}/session-state.yaml"
 
     if [ -f "$session_file" ]; then
@@ -217,6 +231,10 @@ _repl_bootstrap_state() {
     workspace_path="${MCPSERVER_WORKSPACE_PATH:-$start_dir}"
     workspace="${MCPSERVER_WORKSPACE:-$(basename "$workspace_path")}"
     base_url="${MCPSERVER_BASE_URL:-}"
+
+    if declare -F cache_scope_init >/dev/null 2>&1; then
+        cache_scope_init "$REPL_INVOKE_PLUGIN_ROOT" "$workspace_path"
+    fi
 
     _repl_write_session_state "verified" "" "" "" "" "" "" "$workspace_path" "$workspace" "$base_url"
 }

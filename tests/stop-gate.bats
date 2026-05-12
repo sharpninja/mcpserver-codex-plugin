@@ -14,10 +14,12 @@
 PLUGIN_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
 LIB="$PLUGIN_ROOT/lib/repl-invoke.sh"
 STOP_GATE="$PLUGIN_ROOT/lib/stop-gate.sh"
+source "$PLUGIN_ROOT/tests/cache-scope-helper.bash"
 
 setup() {
     SANDBOX="$(mktemp -d)"
-    mkdir -p "$SANDBOX/cache"
+    mkdir -p "$SANDBOX/workspace"
+    init_test_cache "$SANDBOX/workspace" "Codex-20260419T000000Z-stop"
 
     export CODEX_PLUGIN_ROOT="$PLUGIN_ROOT"
     export PLUGIN_ROOT_OVERRIDE="$SANDBOX"
@@ -30,7 +32,8 @@ teardown() {
 
 write_turn() {
     local status="${1:-in_progress}" edits="${2:-0}" build="${3:-unknown}"
-    cat > "$SANDBOX/cache/current-turn.yaml" <<EOF
+    refresh_test_cache
+    cat > "$TEST_CACHE_DIR/current-turn.yaml" <<EOF
 turnRequestId: req-test-stop-001
 queryTitle: Stop gate test
 openedAt: 2026-04-19T00:00:00Z
@@ -45,7 +48,7 @@ run_stop_gate() {
 }
 
 @test "no turn file → no-turn status" {
-    rm -f "$SANDBOX/cache/current-turn.yaml"
+    rm -f "$(test_cache_file current-turn.yaml)"
     out="$(run_stop_gate)"
     echo "$out" | grep -qF '"status":"no-turn"'
 }
@@ -57,7 +60,14 @@ run_stop_gate() {
 }
 
 @test "in_progress turn blocks when repl-invoke cannot be loaded" {
-    write_turn "in_progress"
+    cat > "$SANDBOX/cache/current-turn.yaml" <<EOF
+turnRequestId: req-test-stop-001
+queryTitle: Stop gate test
+openedAt: 2026-04-19T00:00:00Z
+status: in_progress
+codeEdits: 0
+lastBuildStatus: unknown
+EOF
     export CODEX_PLUGIN_ROOT="$SANDBOX/missing-plugin-root"
     out="$(run_stop_gate)"
     export CODEX_PLUGIN_ROOT="$PLUGIN_ROOT"
@@ -80,22 +90,23 @@ run_stop_gate() {
 
 @test "accept-failure marker unblocks failed-build stop" {
     write_turn "completed" 3 "failed"
-    touch "$SANDBOX/cache/turn-accept-failure.marker"
+    touch "$(test_cache_file turn-accept-failure.marker)"
     out="$(run_stop_gate)"
     echo "$out" | grep -qF '"status":"passed"'
 }
 
 @test "accept-failure marker is consumed (deleted) after use" {
     write_turn "completed" 3 "failed"
-    touch "$SANDBOX/cache/turn-accept-failure.marker"
+    marker_file="$(test_cache_file turn-accept-failure.marker)"
+    touch "$marker_file"
     run_stop_gate >/dev/null
-    [ ! -f "$SANDBOX/cache/turn-accept-failure.marker" ]
+    [ ! -f "$marker_file" ]
 }
 
 @test "end-to-end: shim's completeTurn flips cache so stop-gate passes" {
     write_turn "in_progress"
 
-    cat > "$SANDBOX/cache/session-state.yaml" <<EOF
+    cat > "$TEST_CACHE_DIR/session-state.yaml" <<EOF
 status: verified
 sessionId: Codex-20260419T000000Z-test
 workspacePath: "/tmp/ws"
@@ -109,7 +120,7 @@ EOF
 response: |
   E2E test response." ) >/dev/null 2>&1
 
-    status_after="$(grep '^status:' "$SANDBOX/cache/current-turn.yaml" | head -1 | sed 's/^status:[[:space:]]*//')"
+    status_after="$(grep '^status:' "$(test_cache_file current-turn.yaml)" | head -1 | sed 's/^status:[[:space:]]*//')"
     [ "$status_after" = "completed" ]
 
     out="$(run_stop_gate)"
