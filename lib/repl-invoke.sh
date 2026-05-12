@@ -125,6 +125,27 @@ _repl_response_is_nonempty_success() {
     ! _repl_response_is_error "$response" && ! _repl_response_has_empty_result "$response"
 }
 
+_repl_json_escape() {
+    printf '%s' "${1:-}" | awk '
+        BEGIN { ORS = "" }
+        {
+            gsub(/\\/, "\\\\")
+            gsub(/"/, "\\\"")
+            gsub(/\r/, "\\r")
+            gsub(/\t/, "\\t")
+            if (NR > 1) {
+                printf "\\n"
+            }
+            printf "%s", $0
+        }
+    '
+}
+
+_repl_url_path_segment() {
+    printf '%s' "${1:-}" \
+        | sed 's/%/%25/g; s/ /%20/g; s#/#%2F#g; s/?/%3F/g; s/#/%23/g; s/&/%26/g'
+}
+
 _repl_write_session_state() {
     local status="$1"
     local source_type="$2"
@@ -1255,6 +1276,275 @@ _repl_requirements_list_http_fallback() {
     rm -f "$tmp_body" "$tmp_headers"
 }
 
+_repl_todo_json_body() {
+    local operation="$1"
+    local params_yaml="${2:-}"
+    local body="" sep="" value
+
+    _repl_todo_json_add_raw() {
+        local key="$1"
+        local json_value="$2"
+        [ -z "$json_value" ] && return 0
+        body="${body}${sep}\"${key}\":${json_value}"
+        sep=","
+    }
+
+    _repl_todo_json_add_string() {
+        local key="$1"
+        value="$(_repl_param_text "$params_yaml" "$key")"
+        [ -z "$value" ] && return 0
+        value="$(_repl_unquote "$value")"
+        _repl_todo_json_add_raw "$key" "\"$(_repl_json_escape "$value")\""
+    }
+
+    _repl_todo_json_add_bool() {
+        local key="$1" normalized
+        value="$(_repl_yaml_get "$params_yaml" "$key" 2>/dev/null || true)"
+        [ -z "$value" ] && return 0
+        value="$(_repl_unquote "$value")"
+        normalized="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')"
+        case "$normalized" in
+            true|yes|1) _repl_todo_json_add_raw "$key" "true" ;;
+            false|no|0) _repl_todo_json_add_raw "$key" "false" ;;
+        esac
+    }
+
+    _repl_todo_json_add_array() {
+        local key="$1" list_block single item items="" item_sep=""
+        list_block="$(_repl_list_block_get "$params_yaml" "$key")"
+        if [ -n "$list_block" ]; then
+            while IFS= read -r item; do
+                case "$item" in
+                    *-*)
+                        item="$(printf '%s' "$item" | sed 's/^[[:space:]]*-[[:space:]]*//')"
+                        [ -z "$item" ] && continue
+                        item="$(_repl_unquote "$item")"
+                        items="${items}${item_sep}\"$(_repl_json_escape "$item")\""
+                        item_sep=","
+                        ;;
+                esac
+            done <<EOF
+${list_block}
+EOF
+        else
+            single="$(_repl_param_text "$params_yaml" "$key")"
+            if [ -n "$single" ]; then
+                single="$(_repl_unquote "$single")"
+                items="\"$(_repl_json_escape "$single")\""
+            fi
+        fi
+        [ -z "$items" ] && return 0
+        _repl_todo_json_add_raw "$key" "[${items}]"
+    }
+
+    [ "$operation" = "create" ] && _repl_todo_json_add_string "id"
+    _repl_todo_json_add_string "title"
+    _repl_todo_json_add_string "priority"
+    _repl_todo_json_add_string "section"
+    _repl_todo_json_add_string "estimate"
+    _repl_todo_json_add_string "note"
+    _repl_todo_json_add_string "completedDate"
+    _repl_todo_json_add_string "doneSummary"
+    _repl_todo_json_add_string "remaining"
+    _repl_todo_json_add_string "reference"
+    _repl_todo_json_add_string "phase"
+    _repl_todo_json_add_bool "done"
+    _repl_todo_json_add_array "description"
+    _repl_todo_json_add_array "technicalDetails"
+    _repl_todo_json_add_array "implementationTasks"
+    _repl_todo_json_add_array "dependsOn"
+    _repl_todo_json_add_array "functionalRequirements"
+    _repl_todo_json_add_array "technicalRequirements"
+
+    printf '{%s}' "$body"
+}
+
+_repl_todo_http_fallback() {
+    local operation="$1"
+    local params_yaml="${2:-}"
+    local workspace_path workspace_path_bash base_url marker_file api_key
+
+    if ! command -v curl >/dev/null 2>&1; then
+        return 1
+    fi
+
+    workspace_path="$(_repl_unquote "$(_repl_session_state_value "workspacePath")")"
+    base_url="${MCPSERVER_BASE_URL:-$(_repl_unquote "$(_repl_session_state_value "baseUrl")")}"
+
+    workspace_path_bash="$(_repl_path_for_bash "$workspace_path" 2>/dev/null || true)"
+    if ! declare -F find_marker_file >/dev/null 2>&1 || ! declare -F parse_marker_field >/dev/null 2>&1; then
+        # shellcheck source=./marker-resolver.sh
+        source "${REPL_INVOKE_SCRIPT_DIR}/marker-resolver.sh" || return 1
+    fi
+    marker_file=""
+    if [ -n "$workspace_path_bash" ] && declare -F find_marker_file >/dev/null 2>&1; then
+        marker_file="$(find_marker_file "$workspace_path_bash" 2>/dev/null || true)"
+    fi
+
+    api_key="${MCPSERVER_API_KEY:-$(_repl_compat_marker_field "$marker_file" "apiKey" "")}"
+    [ -z "$workspace_path" ] && workspace_path="${MCPSERVER_WORKSPACE_PATH:-$(_repl_compat_marker_field "$marker_file" "workspacePath" "")}"
+    [ -z "$base_url" ] && base_url="$(_repl_compat_marker_field "$marker_file" "baseUrl" "")"
+    [ -z "$api_key" ] && return 1
+    [ -z "$workspace_path" ] && return 1
+    [ -z "$base_url" ] && return 1
+
+    local tmp_body tmp_headers tmp_request curl_status content_type todo_id todo_id_path
+    local keyword priority section done status_value title
+    local -a curl_args
+    mkdir -p "$REPL_INVOKE_CACHE_DIR"
+    tmp_body="${REPL_INVOKE_CACHE_DIR}/todo-${operation}.$$.$RANDOM.body"
+    tmp_headers="${REPL_INVOKE_CACHE_DIR}/todo-${operation}.$$.$RANDOM.headers"
+    tmp_request=""
+
+    curl_args=(-fsSL -D "$tmp_headers" -o "$tmp_body" -H "X-Api-Key: ${api_key}" -H "X-Workspace-Path: ${workspace_path}")
+
+    case "$operation" in
+        query)
+            keyword="$(_repl_yaml_get "$params_yaml" "keyword" 2>/dev/null || true)"
+            title="$(_repl_yaml_get "$params_yaml" "title" 2>/dev/null || true)"
+            priority="$(_repl_yaml_get "$params_yaml" "priority" 2>/dev/null || true)"
+            section="$(_repl_yaml_get "$params_yaml" "section" 2>/dev/null || true)"
+            todo_id="$(_repl_yaml_get "$params_yaml" "id" 2>/dev/null || true)"
+            done="$(_repl_yaml_get "$params_yaml" "done" 2>/dev/null || true)"
+            status_value="$(_repl_yaml_get "$params_yaml" "status" 2>/dev/null || true)"
+            [ -z "$keyword" ] && keyword="$title"
+            if [ -z "$done" ] && [ -n "$status_value" ]; then
+                case "$(printf '%s' "$(_repl_unquote "$status_value")" | tr '[:upper:]' '[:lower:]')" in
+                    open|active|pending|in_progress|in-progress) done="false" ;;
+                    closed|complete|completed|done) done="true" ;;
+                esac
+            fi
+            keyword="$(_repl_unquote "$keyword")"
+            priority="$(_repl_unquote "$priority")"
+            section="$(_repl_unquote "$section")"
+            todo_id="$(_repl_unquote "$todo_id")"
+            done="$(_repl_unquote "$done")"
+            curl_args+=(--get)
+            [ -n "$keyword" ] && curl_args+=(--data-urlencode "keyword=${keyword}")
+            [ -n "$priority" ] && curl_args+=(--data-urlencode "priority=${priority}")
+            [ -n "$section" ] && curl_args+=(--data-urlencode "section=${section}")
+            [ -n "$todo_id" ] && curl_args+=(--data-urlencode "id=${todo_id}")
+            [ -n "$done" ] && curl_args+=(--data-urlencode "done=${done}")
+            curl_args+=("${base_url%/}/mcpserver/todo")
+            ;;
+        get|delete|update|analyzeRequirements)
+            todo_id="$(_repl_yaml_get "$params_yaml" "id" 2>/dev/null || true)"
+            todo_id="$(_repl_unquote "$todo_id")"
+            if [ -z "$todo_id" ]; then
+                rm -f "$tmp_body" "$tmp_headers" "$tmp_request"
+                return 1
+            fi
+            todo_id_path="$(_repl_url_path_segment "$todo_id")"
+            case "$operation" in
+                get)
+                    curl_args+=("${base_url%/}/mcpserver/todo/${todo_id_path}")
+                    ;;
+                delete)
+                    curl_args+=(-X DELETE "${base_url%/}/mcpserver/todo/${todo_id_path}")
+                    ;;
+                update)
+                    tmp_request="${REPL_INVOKE_CACHE_DIR}/todo-${operation}.$$.$RANDOM.json"
+                    _repl_todo_json_body "$operation" "$params_yaml" > "$tmp_request"
+                    curl_args+=(-H "Content-Type: application/json" -X PUT --data-binary "@${tmp_request}" "${base_url%/}/mcpserver/todo/${todo_id_path}")
+                    ;;
+                analyzeRequirements)
+                    tmp_request="${REPL_INVOKE_CACHE_DIR}/todo-${operation}.$$.$RANDOM.json"
+                    _repl_todo_json_body "$operation" "$params_yaml" > "$tmp_request"
+                    curl_args+=(-H "Content-Type: application/json" -X POST --data-binary "@${tmp_request}" "${base_url%/}/mcpserver/todo/${todo_id_path}/requirements")
+                    ;;
+            esac
+            ;;
+        create)
+            tmp_request="${REPL_INVOKE_CACHE_DIR}/todo-${operation}.$$.$RANDOM.json"
+            _repl_todo_json_body "$operation" "$params_yaml" > "$tmp_request"
+            curl_args+=(-H "Content-Type: application/json" -X POST --data-binary "@${tmp_request}" "${base_url%/}/mcpserver/todo")
+            ;;
+        *)
+            rm -f "$tmp_body" "$tmp_headers" "$tmp_request"
+            return 1
+            ;;
+    esac
+
+    curl "${curl_args[@]}" >/dev/null 2>&1
+    curl_status=$?
+    if [ $curl_status -ne 0 ]; then
+        rm -f "$tmp_body" "$tmp_headers" "$tmp_request"
+        return $curl_status
+    fi
+
+    content_type="$(grep -i '^content-type:' "$tmp_headers" 2>/dev/null | head -1 | sed 's/^[Cc]ontent-[Tt]ype:[[:space:]]*//' | tr -d '\r')"
+    content_type="${content_type%%;*}"
+    [ -z "$content_type" ] && content_type="application/json"
+    printf 'type: result\npayload:\n'
+    printf '  result: |\n'
+    sed 's/^/    /' "$tmp_body"
+    printf '\n'
+    printf '  contentType: %s\n' "$content_type"
+    rm -f "$tmp_body" "$tmp_headers" "$tmp_request"
+}
+
+_repl_workflow_todo() {
+    local method="$1"
+    local params_yaml="${2:-}"
+    local operation="${method#workflow.todo.}"
+    local response status typed_method fallback_method=""
+
+    case "$operation" in
+        query) typed_method="client.Todo.QueryAsync" ;;
+        get) typed_method="client.Todo.GetAsync"; fallback_method="client.Todo.GetByIdAsync" ;;
+        create) typed_method="client.Todo.CreateAsync" ;;
+        update) typed_method="client.Todo.UpdateAsync" ;;
+        delete) typed_method="client.Todo.DeleteAsync" ;;
+        analyzeRequirements) typed_method="client.Todo.AnalyzeRequirementsAsync" ;;
+        *)
+            _repl_invoke_raw_in_workspace "$method" "$params_yaml"
+            return $?
+            ;;
+    esac
+
+    response="$(_repl_invoke_raw_in_workspace "$typed_method" "$params_yaml" "compat" 2>&1)"
+    status=$?
+    if [ $status -eq 0 ] && _repl_response_is_nonempty_success "$response"; then
+        printf '%s\n' "$response"
+        return 0
+    fi
+
+    response="$(_repl_todo_http_fallback "$operation" "$params_yaml" 2>&1)"
+    status=$?
+    if [ $status -eq 0 ] && _repl_response_is_nonempty_success "$response"; then
+        printf '%s\n' "$response"
+        return 0
+    fi
+
+    if [ -n "$fallback_method" ]; then
+        response="$(_repl_invoke_raw_in_workspace "$fallback_method" "$params_yaml" "compat" 2>&1)"
+        status=$?
+        if [ $status -eq 0 ] && _repl_response_is_nonempty_success "$response"; then
+            printf '%s\n' "$response"
+            return 0
+        fi
+    fi
+
+    response="$(_repl_invoke_raw_in_workspace "$typed_method" "$params_yaml" 2>&1)"
+    status=$?
+    if [ $status -eq 0 ] && _repl_response_is_nonempty_success "$response"; then
+        printf '%s\n' "$response"
+        return 0
+    fi
+
+    if [ -n "$fallback_method" ]; then
+        response="$(_repl_invoke_raw_in_workspace "$fallback_method" "$params_yaml" 2>&1)"
+        status=$?
+        if [ $status -eq 0 ] && _repl_response_is_nonempty_success "$response"; then
+            printf '%s\n' "$response"
+            return 0
+        fi
+    fi
+
+    printf '%s\n' "$response"
+    return $status
+}
+
 _repl_workflow_requirements() {
     local method="$1"
     local params_yaml="${2:-}"
@@ -1687,7 +1977,7 @@ _repl_workflow_todo_update_selected() {
 ${params}"
     fi
 
-    _repl_invoke_raw "client.Todo.UpdateAsync" "$combined"
+    _repl_workflow_todo "workflow.todo.update" "$combined"
 }
 
 repl_invoke() {
@@ -1728,27 +2018,27 @@ repl_invoke() {
             return $?
             ;;
         workflow.todo.query)
-            _repl_invoke_raw "client.Todo.QueryAsync" "$params_yaml"
+            _repl_workflow_todo "$method" "$params_yaml"
             return $?
             ;;
         workflow.todo.get)
-            _repl_invoke_with_fallback "client.Todo.GetAsync" "client.Todo.GetByIdAsync" "$params_yaml"
+            _repl_workflow_todo "$method" "$params_yaml"
             return $?
             ;;
         workflow.todo.create)
-            _repl_invoke_raw "client.Todo.CreateAsync" "$params_yaml"
+            _repl_workflow_todo "$method" "$params_yaml"
             return $?
             ;;
         workflow.todo.update)
-            _repl_invoke_raw "client.Todo.UpdateAsync" "$params_yaml"
+            _repl_workflow_todo "$method" "$params_yaml"
             return $?
             ;;
         workflow.todo.delete)
-            _repl_invoke_raw "client.Todo.DeleteAsync" "$params_yaml"
+            _repl_workflow_todo "$method" "$params_yaml"
             return $?
             ;;
         workflow.todo.analyzeRequirements)
-            _repl_invoke_raw "client.Todo.AnalyzeRequirementsAsync" "$params_yaml"
+            _repl_workflow_todo "$method" "$params_yaml"
             return $?
             ;;
         workflow.todo.select)
@@ -1801,4 +2091,4 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     exit $?
 fi
 
-export -f repl_invoke repl_build_envelope _repl_compat_marker_endpoint_field _repl_compat_marker_field _repl_create_compat_marker _repl_first_param_text _repl_invoke_raw _repl_invoke_raw_in_workspace _repl_invoke_with_fallback _repl_bootstrap_state _repl_emit_response _repl_generate_session_id _repl_normalized_actions_block _repl_normalized_dialog_items_block _repl_param_text _repl_path_for_bash _repl_path_for_repl _repl_persist_turn _repl_requirements_bootstrap_state _repl_requirements_generate_http_fallback _repl_requirements_normalize_generate_response _repl_requirements_typed_doc_type _repl_requirements_typed_method _repl_requirements_typed_params _repl_requirements_workflow_doc_type _repl_requirements_workflow_params _repl_requirement_list_field _repl_response_has_empty_result _repl_response_is_error _repl_response_is_nonempty_success _repl_session_meta _repl_session_state_value _repl_state_value _repl_submit_session _repl_turns_block _repl_workflow_append_actions _repl_workflow_append_dialog _repl_workflow_begin_turn _repl_workflow_bootstrap _repl_workflow_complete_turn _repl_workflow_open_session _repl_workflow_query_history _repl_workflow_requirements _repl_workflow_todo_select _repl_workflow_todo_update_selected _repl_workflow_update_turn _repl_yaml_block_get _repl_yaml_field _repl_yaml_get 2>/dev/null || true
+export -f repl_invoke repl_build_envelope _repl_compat_marker_endpoint_field _repl_compat_marker_field _repl_create_compat_marker _repl_first_param_text _repl_invoke_raw _repl_invoke_raw_in_workspace _repl_invoke_with_fallback _repl_bootstrap_state _repl_emit_response _repl_generate_session_id _repl_json_escape _repl_normalized_actions_block _repl_normalized_dialog_items_block _repl_param_text _repl_path_for_bash _repl_path_for_repl _repl_persist_turn _repl_requirements_bootstrap_state _repl_requirements_generate_http_fallback _repl_requirements_normalize_generate_response _repl_requirements_typed_doc_type _repl_requirements_typed_method _repl_requirements_typed_params _repl_requirements_workflow_doc_type _repl_requirements_workflow_params _repl_requirement_list_field _repl_response_has_empty_result _repl_response_is_error _repl_response_is_nonempty_success _repl_session_meta _repl_session_state_value _repl_state_value _repl_submit_session _repl_todo_http_fallback _repl_todo_json_body _repl_turns_block _repl_url_path_segment _repl_workflow_append_actions _repl_workflow_append_dialog _repl_workflow_begin_turn _repl_workflow_bootstrap _repl_workflow_complete_turn _repl_workflow_open_session _repl_workflow_query_history _repl_workflow_requirements _repl_workflow_todo _repl_workflow_todo_select _repl_workflow_todo_update_selected _repl_workflow_update_turn _repl_yaml_block_get _repl_yaml_field _repl_yaml_get 2>/dev/null || true

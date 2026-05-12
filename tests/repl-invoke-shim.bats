@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# Regression suite for the workflow.sessionlog.* shim added to lib/repl-invoke.sh.
+# Regression suite for workflow shims added to lib/repl-invoke.sh.
 #
 # Original bug: every workflow.sessionlog.* call returned method_not_found
 # from mcpserver-repl. mcpserver-repl exits 0 even on type:error, so callers
@@ -49,13 +49,23 @@ if [ "$method" = "workflow.requirements.generateDocument" ] && [ "${STUB_WORKFLO
     fi
 fi
 
-if [ "$method" = "client.SessionLog.QueryAsync" ] && [ "${STUB_REQUIRE_COMPAT_AUTH:-}" = "1" ] && [ "${MCP_WORKSPACE_PATH:-}" = "${STUB_AUTH_FAIL_WORKSPACE_PATH:-}" ]; then
+if [[ "$method" == "client.SessionLog.QueryAsync" || "$method" == client.Todo.* ]] && [ "${STUB_REQUIRE_COMPAT_AUTH:-}" = "1" ] && [ "${MCP_WORKSPACE_PATH:-}" = "${STUB_AUTH_FAIL_WORKSPACE_PATH:-}" ]; then
     printf 'type: error\npayload:\n  code: method_invocation_error\n  message: Authentication required: no credential is configured on this client.\n'
     exit 0
 fi
 
+if [[ "$method" == "client.Todo.GetAsync" || "$method" == "client.Todo.GetByIdAsync" ]] && [ "${STUB_TODO_GET_MISSING_ID:-}" = "1" ]; then
+    printf 'type: error\npayload:\n  code: invalid_request\n  message: Missing required parameter: id (type: String)\n'
+    exit 0
+fi
+
+if [ "$method" = "client.Todo.UpdateAsync" ] && [ "${STUB_TODO_UPDATE_REJECT:-}" = "1" ]; then
+    printf 'type: error\npayload:\n  code: invalid_request\n  message: Missing required parameter: request (type: TodoUpdateRequest)\n'
+    exit 0
+fi
+
 case "$method" in
-    client.SessionLog.SubmitAsync|client.SessionLog.QueryAsync|client.SessionLog.AppendDialogAsync|client.Todo.QueryAsync|client.Todo.UpdateAsync|client.Todo.GetAsync|client.Todo.GetByIdAsync)
+    client.SessionLog.SubmitAsync|client.SessionLog.QueryAsync|client.SessionLog.AppendDialogAsync|client.Todo.QueryAsync|client.Todo.UpdateAsync|client.Todo.GetAsync|client.Todo.GetByIdAsync|client.Todo.CreateAsync|client.Todo.DeleteAsync|client.Todo.AnalyzeRequirementsAsync)
         printf 'type: response\npayload:\n  ok: true\n'
         ;;
     workflow.sessionlog.*|workflow.requirements.*)
@@ -113,6 +123,11 @@ STUB
 #!/usr/bin/env bash
 headers_file=""
 output_file=""
+method="GET"
+url=""
+body_arg=""
+headers=()
+query_args=()
 while [ "$#" -gt 0 ]; do
     case "$1" in
         -D)
@@ -124,30 +139,104 @@ while [ "$#" -gt 0 ]; do
             shift 2
             ;;
         -H)
+            headers+=("$2")
             shift 2
+            ;;
+        -X)
+            method="$2"
+            shift 2
+            ;;
+        --data-binary|--data|--data-raw|-d)
+            body_arg="$2"
+            [ "$method" = "GET" ] && method="POST"
+            shift 2
+            ;;
+        --data-urlencode)
+            query_args+=("$2")
+            shift 2
+            ;;
+        --get)
+            method="GET"
+            shift
+            ;;
+        -fsSL|-f|-s|-S|-L)
+            shift
             ;;
         -*)
             shift
             ;;
         *)
+            url="$1"
             shift
             ;;
     esac
 done
-[ -n "$headers_file" ] && printf 'HTTP/1.1 200 OK\r\nContent-Type: application/zip\r\n\r\n' > "$headers_file"
-[ -n "$output_file" ] && printf 'PK\003\004' > "$output_file"
+body=""
+if [ -n "$body_arg" ]; then
+    case "$body_arg" in
+        @*) body="$(cat "${body_arg#@}")" ;;
+        *) body="$body_arg" ;;
+    esac
+fi
+{
+    printf 'curl_method=%s\n' "$method"
+    printf 'curl_url=%s\n' "$url"
+    for header in "${headers[@]}"; do
+        printf 'curl_header=%s\n' "$header"
+    done
+    for query in "${query_args[@]}"; do
+        printf 'curl_query=%s\n' "$query"
+    done
+    [ -n "$body" ] && printf 'curl_body=%s\n' "$body"
+    printf '%s\n' '---'
+} >> "${STUB_LOG:-/dev/null}"
+
+content_type="application/zip"
+payload=""
+case "$url" in
+    */mcpserver/todo)
+        content_type="application/json"
+        if [ "$method" = "POST" ]; then
+            payload='{"id":"TODO-NEW","created":true}'
+        else
+            payload='[{"id":"RENDER-MAP3D-001","done":false}]'
+        fi
+        ;;
+    */mcpserver/todo/*/requirements)
+        content_type="application/json"
+        payload='{"id":"RENDER-MAP3D-001","requirements":[]}'
+        ;;
+    */mcpserver/todo/*)
+        content_type="application/json"
+        case "$method" in
+            DELETE) payload='{"deleted":true}' ;;
+            PUT) payload='{"id":"RENDER-MAP3D-001","updated":true}' ;;
+            *) payload='{"id":"RENDER-MAP3D-001","title":"Map 3D"}' ;;
+        esac
+        ;;
+esac
+[ -n "$headers_file" ] && printf 'HTTP/1.1 200 OK\r\nContent-Type: %s\r\n\r\n' "$content_type" > "$headers_file"
+if [ -n "$output_file" ]; then
+    if [ "$content_type" = "application/zip" ]; then
+        printf 'PK\003\004' > "$output_file"
+    else
+        printf '%s' "$payload" > "$output_file"
+    fi
+fi
 exit 0
 STUB
     chmod +x "$SANDBOX/bin/curl"
 
     cat > "$SANDBOX/bin/pwsh.exe" <<'STUB'
 #!/usr/bin/env bash
+printf '0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF\n'
 exit 0
 STUB
     chmod +x "$SANDBOX/bin/pwsh.exe"
 
     cat > "$SANDBOX/bin/powershell.exe" <<'STUB'
 #!/usr/bin/env bash
+printf '0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF\n'
 exit 0
 STUB
     chmod +x "$SANDBOX/bin/powershell.exe"
@@ -327,6 +416,83 @@ limit: 1"
     grep -q "cwd=.*repl-marker" "$STUB_LOG"
     grep -q '^MCP_WORKSPACE_PATH=$' "$STUB_LOG"
     ! grep -q "MCP_WORKSPACE_PATH=$SANDBOX/workspace" "$STUB_LOG"
+}
+
+@test "workflow.todo.query uses compatibility marker without workspace env override" {
+    write_requirements_state
+    export MCPSERVER_API_KEY="test-api-key"
+    export STUB_REQUIRE_COMPAT_AUTH=1
+    export STUB_AUTH_FAIL_WORKSPACE_PATH="$SANDBOX/workspace"
+    source "$LIB"
+
+    run repl_invoke "workflow.todo.query" "id: RENDER-MAP3D-001"
+
+    unset MCPSERVER_API_KEY
+    unset STUB_REQUIRE_COMPAT_AUTH
+    unset STUB_AUTH_FAIL_WORKSPACE_PATH
+    [ "$status" -eq 0 ]
+    [ "$(grep -c "method=client.Todo.QueryAsync" "$STUB_LOG")" -eq 1 ]
+    grep -q "cwd=.*repl-marker" "$STUB_LOG"
+    grep -q '^MCP_WORKSPACE_PATH=$' "$STUB_LOG"
+    ! grep -q "MCP_WORKSPACE_PATH=$SANDBOX/workspace" "$STUB_LOG"
+}
+
+@test "workflow.todo.get falls back to authenticated HTTP when typed client rejects id" {
+    write_requirements_state
+    export MCPSERVER_API_KEY="test-api-key"
+    export STUB_TODO_GET_MISSING_ID=1
+    source "$LIB"
+
+    run repl_invoke "workflow.todo.get" "id: RENDER-MAP3D-001"
+
+    unset MCPSERVER_API_KEY
+    unset STUB_TODO_GET_MISSING_ID
+    [ "$status" -eq 0 ]
+    echo "$output" | grep -q '"id":"RENDER-MAP3D-001"'
+    grep -q "method=client.Todo.GetAsync" "$STUB_LOG"
+    grep -q "curl_method=GET" "$STUB_LOG"
+    grep -q "curl_url=http://127.0.0.1:8765/mcpserver/todo/RENDER-MAP3D-001" "$STUB_LOG"
+    grep -q "curl_header=X-Api-Key: test-api-key" "$STUB_LOG"
+    grep -q "curl_header=X-Workspace-Path: $SANDBOX/workspace" "$STUB_LOG"
+}
+
+@test "workflow.todo.update falls back to authenticated HTTP with JSON body" {
+    write_requirements_state
+    export MCPSERVER_API_KEY="test-api-key"
+    export STUB_TODO_UPDATE_REJECT=1
+    source "$LIB"
+
+    run repl_invoke "workflow.todo.update" "id: RENDER-MAP3D-001
+done: true
+note: finished"
+
+    unset MCPSERVER_API_KEY
+    unset STUB_TODO_UPDATE_REJECT
+    [ "$status" -eq 0 ]
+    echo "$output" | grep -q '"updated":true'
+    grep -q "method=client.Todo.UpdateAsync" "$STUB_LOG"
+    grep -q "curl_method=PUT" "$STUB_LOG"
+    grep -q "curl_url=http://127.0.0.1:8765/mcpserver/todo/RENDER-MAP3D-001" "$STUB_LOG"
+    grep -q 'curl_body=.*"note":"finished"' "$STUB_LOG"
+    grep -q 'curl_body=.*"done":true' "$STUB_LOG"
+}
+
+@test "workflow.todo.updateSelected uses selected TODO through workflow fallback" {
+    write_requirements_state
+    export MCPSERVER_API_KEY="test-api-key"
+    export STUB_TODO_UPDATE_REJECT=1
+    source "$LIB"
+
+    run repl_invoke "workflow.todo.select" "id: RENDER-MAP3D-001"
+    [ "$status" -eq 0 ]
+    run repl_invoke "workflow.todo.updateSelected" "done: true"
+
+    unset MCPSERVER_API_KEY
+    unset STUB_TODO_UPDATE_REJECT
+    [ "$status" -eq 0 ]
+    grep -q "curl_method=PUT" "$STUB_LOG"
+    grep -q "curl_url=http://127.0.0.1:8765/mcpserver/todo/RENDER-MAP3D-001" "$STUB_LOG"
+    grep -q 'curl_body=.*"done":true' "$STUB_LOG"
 }
 
 @test "raw call returns exit 1 when mcpserver-repl emits type: error" {
