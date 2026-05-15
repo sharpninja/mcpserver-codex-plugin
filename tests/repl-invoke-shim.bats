@@ -837,6 +837,41 @@ JSON
     ! grep -q "method=workflow.sessionlog.importRecovery" "$STUB_LOG"
 }
 
+@test "workflow.sessionlog.importRecovery accepts nested YAML sessionLog payloads" {
+    command -v node >/dev/null 2>&1 || skip "node not available"
+    write_requirements_state
+    export MCPSERVER_API_KEY="test-api-key"
+    source "$LIB"
+
+    run repl_invoke "workflow.sessionlog.importRecovery" 'sessionLog:
+  sourceType: Codex
+  sessionId: Codex-20260515T000000Z-import-yaml-test
+  title: Import YAML test
+  status: completed
+  turns:
+    - requestId: req-20260515T000100Z-imported-yaml
+      queryTitle: Imported YAML
+      queryText: |
+        Import this nested YAML recovery turn.
+      status: completed
+      response: >-
+        folded response should become text, not the literal marker.
+      actions:
+        - type: test
+          status: completed
+          description: validated nested yaml'
+
+    unset MCPSERVER_API_KEY
+    [ "$status" -eq 0 ]
+    echo "$output" | grep -q '"success":true'
+    grep -q "curl_url=http://127.0.0.1:8765/mcpserver/sessionlog" "$STUB_LOG"
+    grep -q '"sessionId":"Codex-20260515T000000Z-import-yaml-test"' "$STUB_LOG"
+    grep -q '"queryTitle":"Imported YAML"' "$STUB_LOG"
+    grep -q '"response":"folded response should become text, not the literal marker."' "$STUB_LOG"
+    grep -q '"description":"validated nested yaml"' "$STUB_LOG"
+    ! grep -q "method=workflow.sessionlog.importRecovery" "$STUB_LOG"
+}
+
 @test "failsafe write stores replayable generic operation under workspace .mcpServer" {
     command -v node >/dev/null 2>&1 || skip "node not available"
     write_requirements_state

@@ -2636,21 +2636,7 @@ _repl_sessionlog_import_recovery_http_fallback() {
     tmp_headers="${REPL_INVOKE_CACHE_DIR}/sessionlog-import.$$.$RANDOM.headers"
     timeout_seconds="${REPL_SESSIONLOG_HTTP_TIMEOUT:-20}"
 
-    printf '%s' "$params_yaml" | node -e '
-const fs = require("fs");
-const input = fs.readFileSync(0, "utf8").trim();
-let sessionLog;
-try {
-  const parsed = JSON.parse(input);
-  sessionLog = parsed.sessionLog || parsed;
-} catch {
-  const match = input.match(/^sessionLog:\s*(\{[\s\S]*\})\s*$/m);
-  if (!match) process.exit(2);
-  sessionLog = JSON.parse(match[1]);
-}
-if (!sessionLog || typeof sessionLog !== "object" || Array.isArray(sessionLog)) process.exit(2);
-process.stdout.write(JSON.stringify(sessionLog));
-' > "$tmp_request" 2>/dev/null || {
+    printf '%s' "$params_yaml" | node "${REPL_INVOKE_SCRIPT_DIR}/sessionlog-recovery-body.js" > "$tmp_request" 2>/dev/null || {
         rm -f "$tmp_request" "$tmp_body" "$tmp_headers"
         return 1
     }
