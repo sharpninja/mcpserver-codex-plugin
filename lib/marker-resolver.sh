@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-set -euo pipefail
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+    set -euo pipefail
+fi
 
 # Functions for marker file discovery and verification.
 # Source this file: source "$(dirname "$0")/marker-resolver.sh"
@@ -195,7 +197,7 @@ full_bootstrap() {
     # Health nonce check
     local nonce="nonce-$(date +%s)-$$"
     local health_response
-    health_response=$(curl -sf "${base_url}/health?nonce=${nonce}" 2>/dev/null) || {
+    health_response=$(curl -sf --max-time "${MCP_PLUGIN_HEALTH_TIMEOUT_SECONDS:-5}" "${base_url}/health?nonce=${nonce}" 2>/dev/null) || {
         echo "MCP_UNTRUSTED: Health check failed" >&2
         return 1
     }

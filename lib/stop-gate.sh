@@ -62,7 +62,14 @@ if [ "$TURN_STATUS" = "in_progress" ]; then
     if type _repl_workflow_complete_turn >/dev/null 2>&1; then
         AUTO_PARAMS="response: |
     Auto-closed by stop-gate.sh (turn self-heal). The agent could not invoke workflow.sessionlog.* directly; the hook now finalizes the turn when the response finishes."
+        PREVIOUS_REPL_TIMEOUT="${REPL_TIMEOUT:-}"
+        export REPL_TIMEOUT="${REPL_SESSIONLOG_REPL_TIMEOUT:-8}"
         _repl_workflow_complete_turn "$AUTO_PARAMS" >/dev/null 2>&1 || true
+        if [ -n "$PREVIOUS_REPL_TIMEOUT" ]; then
+            export REPL_TIMEOUT="$PREVIOUS_REPL_TIMEOUT"
+        else
+            unset REPL_TIMEOUT
+        fi
         TURN_STATUS="$(grep '^status:' "$TURN_FILE" 2>/dev/null | head -1 | sed 's/^status:[[:space:]]*//')"
     fi
     if [ "$TURN_STATUS" = "in_progress" ]; then

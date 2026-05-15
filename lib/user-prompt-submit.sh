@@ -21,6 +21,31 @@ CODEX_PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 source "$CODEX_PLUGIN_ROOT/lib/cache-scope.sh"
 cache_scope_init "$CODEX_PLUGIN_ROOT" "$PWD"
 
+hook_run_with_timeout() {
+    local timeout_seconds="${1:-8}"
+    shift
+
+    if command -v timeout >/dev/null 2>&1; then
+        timeout --kill-after=2s "$timeout_seconds" "$@"
+        return $?
+    fi
+
+    "$@"
+}
+
+LOCK_DIR="$CACHE_DIR/user-prompt-submit.lock"
+if [ -d "$LOCK_DIR" ]; then
+    LOCK_AGE=$(( $(date +%s) - $(stat -c %Y "$LOCK_DIR" 2>/dev/null || echo 0) ))
+    if [ "$LOCK_AGE" -gt "${MCP_PLUGIN_STALE_LOCK_SECONDS:-120}" ]; then
+        rm -rf "$LOCK_DIR"
+    fi
+fi
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","status":"already-running"}}\n'
+    exit 0
+fi
+trap 'rm -rf "$LOCK_DIR"' EXIT
+
 # Source libraries
 if ! type repl_invoke >/dev/null 2>&1; then
     # shellcheck source=../../lib/repl-invoke.sh
@@ -47,7 +72,7 @@ if [ ! -f "$CACHE_DIR/session-state.yaml" ] || [ -z "$(grep '^sessionId:' "$CACH
     if [ -f "$CODEX_PLUGIN_ROOT/lib/session-start.sh" ]; then
         MCP_SESSION_AGENT="${MCP_SESSION_AGENT:-Codex}" \
         MCP_SESSION_MODEL="${MCP_SESSION_MODEL:-codex}" \
-            bash "$CODEX_PLUGIN_ROOT/lib/session-start.sh" "$PWD" >/dev/null 2>&1 || true
+            hook_run_with_timeout "${REPL_SESSIONLOG_REPL_TIMEOUT:-8}" bash "$CODEX_PLUGIN_ROOT/lib/session-start.sh" "$PWD" >/dev/null 2>&1 || true
         cache_scope_init "$CODEX_PLUGIN_ROOT" "$PWD"
     fi
 fi
@@ -83,10 +108,17 @@ ${QUERY_TEXT_BLOCK}"
 
 # Open the turn. Graceful fallback to cache_write if REPL unavailable.
 if type repl_invoke >/dev/null 2>&1; then
+    PREVIOUS_REPL_TIMEOUT="${REPL_TIMEOUT:-}"
+    export REPL_TIMEOUT="${REPL_SESSIONLOG_REPL_TIMEOUT:-8}"
     if ! repl_invoke "workflow.sessionlog.beginTurn" "$TURN_PARAMS" >/dev/null 2>&1; then
         if type cache_write >/dev/null 2>&1; then
             cache_write "workflow.sessionlog.beginTurn" "$TURN_PARAMS" >/dev/null 2>&1 || true
         fi
+    fi
+    if [ -n "$PREVIOUS_REPL_TIMEOUT" ]; then
+        export REPL_TIMEOUT="$PREVIOUS_REPL_TIMEOUT"
+    else
+        unset REPL_TIMEOUT
     fi
 fi
 

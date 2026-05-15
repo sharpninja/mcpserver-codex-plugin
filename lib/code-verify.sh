@@ -22,6 +22,19 @@ source "$CODEX_PLUGIN_ROOT/lib/cache-scope.sh"
 cache_scope_init "$CODEX_PLUGIN_ROOT" "$PWD"
 TURN_FILE="$CACHE_DIR/current-turn.yaml"
 
+LOCK_DIR="$CACHE_DIR/code-verify.lock"
+if [ -d "$LOCK_DIR" ]; then
+    LOCK_AGE=$(( $(date +%s) - $(stat -c %Y "$LOCK_DIR" 2>/dev/null || echo 0) ))
+    if [ "$LOCK_AGE" -gt "${MCP_PLUGIN_STALE_LOCK_SECONDS:-120}" ]; then
+        rm -rf "$LOCK_DIR"
+    fi
+fi
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    printf '{"hookSpecificOutput":{"hookEventName":"PostToolUse","status":"already-running"}}\n'
+    exit 0
+fi
+trap 'rm -rf "$LOCK_DIR"' EXIT
+
 # Source libraries best-effort
 if ! type repl_invoke >/dev/null 2>&1; then
     source "$CODEX_PLUGIN_ROOT/lib/repl-invoke.sh" 2>/dev/null || true
@@ -155,7 +168,14 @@ if type repl_invoke >/dev/null 2>&1 && [ -f "$TURN_FILE" ]; then
     type: edit
     status: completed
     filePath: \"${FILE_PATH}\""
+        PREVIOUS_REPL_TIMEOUT="${REPL_TIMEOUT:-}"
+        export REPL_TIMEOUT="${REPL_SESSIONLOG_REPL_TIMEOUT:-8}"
         repl_invoke "workflow.sessionlog.appendActions" "$ACTION_PARAMS" >/dev/null 2>&1 || true
+        if [ -n "$PREVIOUS_REPL_TIMEOUT" ]; then
+            export REPL_TIMEOUT="$PREVIOUS_REPL_TIMEOUT"
+        else
+            unset REPL_TIMEOUT
+        fi
     fi
 fi
 

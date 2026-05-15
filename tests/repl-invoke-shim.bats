@@ -13,7 +13,8 @@ source "$PLUGIN_ROOT/tests/cache-scope-helper.bash"
 setup() {
     SANDBOX="$(mktemp -d)"
     mkdir -p "$SANDBOX/bin" "$SANDBOX/workspace"
-    export REPL_TIMEOUT=5
+    export REPL_TIMEOUT=2
+    export REPL_TODO_REPL_TIMEOUT=2
     export STUB_LOG="$SANDBOX/repl-calls.log"
     export STUB_DB="$SANDBOX/requirements-fr.db"
 
@@ -68,6 +69,9 @@ fi
 case "$method" in
     client.SessionLog.SubmitAsync|client.SessionLog.QueryAsync|client.SessionLog.AppendDialogAsync|client.Todo.QueryAsync|client.Todo.UpdateAsync|client.Todo.GetAsync|client.Todo.GetByIdAsync|client.Todo.CreateAsync|client.Todo.DeleteAsync|client.Todo.AnalyzeRequirementsAsync)
         printf 'type: response\npayload:\n  ok: true\n'
+        ;;
+    workflow.sessionlog.importRecovery)
+        printf 'type: result\npayload:\n  result:\n    importedTurns: 1\n    totalTurns: 1\n'
         ;;
     workflow.sessionlog.*|workflow.requirements.*)
         printf 'type: error\npayload:\n  code: method_not_found\n  message: not routed\n'
@@ -156,6 +160,9 @@ while [ "$#" -gt 0 ]; do
             query_args+=("$2")
             shift 2
             ;;
+        --max-time)
+            shift 2
+            ;;
         --get)
             method="GET"
             shift
@@ -192,9 +199,19 @@ fi
     printf '%s\n' '---'
 } >> "${STUB_LOG:-/dev/null}"
 
+if [ "${STUB_TODO_HTTP_400:-}" = "1" ] && [[ "$url" == */mcpserver/todo* ]]; then
+    [ -n "$headers_file" ] && printf 'HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\n\r\n' > "$headers_file"
+    [ -n "$output_file" ] && printf '{"error":"section Architecture is not valid"}' > "$output_file"
+    exit 0
+fi
+
 content_type="application/zip"
 payload=""
 case "$url" in
+    */mcpserver/sessionlog)
+        content_type="application/json"
+        payload='{"success":true,"sessionLogId":123}'
+        ;;
     */mcpserver/todo)
         content_type="application/json"
         if [ "$method" = "POST" ]; then
@@ -419,7 +436,7 @@ limit: 1"
     ! grep -q "MCP_WORKSPACE_PATH=$SANDBOX/workspace" "$STUB_LOG"
 }
 
-@test "workflow.todo.query uses compatibility marker without workspace env override" {
+@test "workflow.todo.query uses authenticated HTTP fallback before REPL" {
     write_requirements_state
     export MCPSERVER_API_KEY="test-api-key"
     export STUB_REQUIRE_COMPAT_AUTH=1
@@ -432,10 +449,30 @@ limit: 1"
     unset STUB_REQUIRE_COMPAT_AUTH
     unset STUB_AUTH_FAIL_WORKSPACE_PATH
     [ "$status" -eq 0 ]
-    [ "$(grep -c "method=client.Todo.QueryAsync" "$STUB_LOG")" -eq 1 ]
-    grep -q "cwd=.*repl-marker" "$STUB_LOG"
-    grep -q '^MCP_WORKSPACE_PATH=$' "$STUB_LOG"
-    ! grep -q "MCP_WORKSPACE_PATH=$SANDBOX/workspace" "$STUB_LOG"
+    echo "$output" | grep -q '"id":"RENDER-MAP3D-001"'
+    ! grep -q "method=client.Todo.QueryAsync" "$STUB_LOG"
+    grep -q "curl_method=GET" "$STUB_LOG"
+    grep -q "curl_url=http://127.0.0.1:8765/mcpserver/todo" "$STUB_LOG"
+    grep -q "curl_query=id=RENDER-MAP3D-001" "$STUB_LOG"
+    grep -q "curl_header=X-Api-Key: test-api-key" "$STUB_LOG"
+    grep -q "curl_header=X-Workspace-Path: $SANDBOX/workspace" "$STUB_LOG"
+}
+
+@test "workflow.todo.create typed fallback wraps flat YAML in request parameter" {
+    write_requirements_state
+    source "$LIB"
+
+    typed_params="$(_repl_todo_typed_params "create" "id: MCP-TODO-CREATE-001
+title: Create through workflow shim
+section: Backlog
+priority: medium
+implementationTasks:
+  - task: Normalize create request
+    done: false")"
+
+    printf '%s\n' "$typed_params" | grep -q "^request:"
+    printf '%s\n' "$typed_params" | grep -q "^  id: MCP-TODO-CREATE-001"
+    printf '%s\n' "$typed_params" | grep -q "^  implementationTasks:"
 }
 
 @test "workflow.todo.get falls back to authenticated HTTP when typed client rejects id" {
@@ -450,11 +487,27 @@ limit: 1"
     unset STUB_TODO_GET_MISSING_ID
     [ "$status" -eq 0 ]
     echo "$output" | grep -q '"id":"RENDER-MAP3D-001"'
-    grep -q "method=client.Todo.GetAsync" "$STUB_LOG"
+    ! grep -q "method=client.Todo.GetAsync" "$STUB_LOG"
     grep -q "curl_method=GET" "$STUB_LOG"
     grep -q "curl_url=http://127.0.0.1:8765/mcpserver/todo/RENDER-MAP3D-001" "$STUB_LOG"
     grep -q "curl_header=X-Api-Key: test-api-key" "$STUB_LOG"
     grep -q "curl_header=X-Workspace-Path: $SANDBOX/workspace" "$STUB_LOG"
+}
+
+@test "workflow.todo.update typed fallback wraps flat YAML in request parameter" {
+    write_requirements_state
+    source "$LIB"
+
+    typed_params="$(_repl_todo_typed_params "update" "id: MCP-TODO-CREATE-001
+done: true
+doneSummary: >-
+  Finished through typed workflow
+  without literal scalar markers.")"
+
+    printf '%s\n' "$typed_params" | grep -q "^id: MCP-TODO-CREATE-001"
+    printf '%s\n' "$typed_params" | grep -q "^request:"
+    printf '%s\n' "$typed_params" | grep -q "^  done: true"
+    printf '%s\n' "$typed_params" | grep -q "^  doneSummary: >-"
 }
 
 @test "workflow.todo.update falls back to authenticated HTTP with JSON body" {
@@ -471,11 +524,61 @@ note: finished"
     unset STUB_TODO_UPDATE_REJECT
     [ "$status" -eq 0 ]
     echo "$output" | grep -q '"updated":true'
-    grep -q "method=client.Todo.UpdateAsync" "$STUB_LOG"
+    ! grep -q "method=client.Todo.UpdateAsync" "$STUB_LOG"
     grep -q "curl_method=PUT" "$STUB_LOG"
     grep -q "curl_url=http://127.0.0.1:8765/mcpserver/todo/RENDER-MAP3D-001" "$STUB_LOG"
     grep -q 'curl_body=.*"note":"finished"' "$STUB_LOG"
     grep -q 'curl_body=.*"done":true' "$STUB_LOG"
+}
+
+@test "TODO HTTP body folds doneSummary and maps implementationTasks objects" {
+    write_requirements_state
+    source "$LIB"
+
+    body="$(_repl_todo_json_body "update" "section: Architecture
+doneSummary: >-
+  Completed the typed create path
+  and preserved YAML semantics.
+implementationTasks:
+  - task: Normalize typed request
+    done: true
+  - Add fallback diagnostics")"
+
+    printf '%s\n' "$body" | grep -q '"doneSummary":"Completed the typed create path and preserved YAML semantics."'
+    printf '%s\n' "$body" | grep -q '"section":"Backlog"'
+    printf '%s\n' "$body" | grep -q '"implementationTasks":\[{"task":"Normalize typed request","done":true},{"task":"Add fallback diagnostics","done":false}\]'
+    ! printf '%s\n' "$body" | grep -q '>-'
+}
+
+@test "TODO HTTP body accepts JSON request wrapper because JSON is YAML" {
+    command -v node >/dev/null 2>&1 || skip "node not available"
+    write_requirements_state
+    source "$LIB"
+
+    body="$(_repl_todo_json_body "update" '{"id":"RENDER-MAP3D-001","request":{"done":true,"section":"Architecture","doneSummary":"Finished from JSON"}}')"
+
+    printf '%s\n' "$body" | grep -q '"done":true'
+    printf '%s\n' "$body" | grep -q '"section":"Backlog"'
+    printf '%s\n' "$body" | grep -q '"doneSummary":"Finished from JSON"'
+    ! printf '%s\n' "$body" | grep -q '"request"'
+}
+
+@test "workflow.todo.create HTTP fallback preserves 4xx response body" {
+    write_requirements_state
+    export MCPSERVER_API_KEY="test-api-key"
+    export STUB_TODO_HTTP_400=1
+    source "$LIB"
+
+    run _repl_todo_http_fallback "create" "id: MCP-TODO-CREATE-400
+title: Invalid section
+section: Architecture
+priority: medium"
+
+    unset MCPSERVER_API_KEY
+    unset STUB_TODO_HTTP_400
+    [ "$status" -eq 1 ]
+    echo "$output" | grep -q "TODO HTTP fallback returned HTTP 400 for create"
+    echo "$output" | grep -q "section Architecture is not valid"
 }
 
 @test "workflow.todo.updateSelected uses selected TODO through workflow fallback" {
@@ -583,47 +686,63 @@ docType: matrix"
     grep -q "input:     format: markdown" "$STUB_LOG"
 }
 
-@test "workflow.requirements.generateDocument returns wiki workspace export metadata through typed fallback" {
+@test "workflow.requirements.generateDocument returns wiki ZIP content instead of workspace metadata" {
     write_requirements_state
+    export MCPSERVER_API_KEY="test-api-key"
     source "$LIB"
     run repl_invoke "workflow.requirements.generateDocument" "format: wiki
 docType: all"
+    unset MCPSERVER_API_KEY
     [ "$status" -eq 0 ]
-    echo "$output" | grep -q "outputRoot: /workspace/docs/Project/wiki"
-    echo "$output" | grep -q "relativePath: azure/Home.md"
+    echo "$output" | grep -q "contentBase64: UEsDBA=="
+    echo "$output" | grep -q "contentType: application/zip"
+    echo "$output" | grep -q "fileName: requirements-wiki-documents.zip"
+    ! echo "$output" | grep -q "outputRoot: /workspace/docs/Project/wiki"
     grep -q "input:     doc: all" "$STUB_LOG"
     grep -q "input:     format: wiki" "$STUB_LOG"
 }
 
 @test "workflow.requirements.generateDocument falls back when workflow rejects wiki format" {
     write_requirements_state
-    export STUB_WORKFLOW_REQUIREMENTS_REJECT_WIKI=1
-    source "$LIB"
-    run repl_invoke "workflow.requirements.generateDocument" "format: wiki
-docType: all"
-    unset STUB_WORKFLOW_REQUIREMENTS_REJECT_WIKI
-    [ "$status" -eq 0 ]
-    echo "$output" | grep -q "outputRoot: /workspace/docs/Project/wiki"
-    ! echo "$output" | grep -q "Invalid format: wiki"
-    grep -q "method=workflow.requirements.generateDocument" "$STUB_LOG"
-    grep -q "method=client.Requirements.GenerateAsync" "$STUB_LOG"
-}
-
-@test "workflow.requirements.generateDocument uses HTTP fallback when REPL typed result is empty" {
-    write_requirements_state
     export MCPSERVER_API_KEY="test-api-key"
     export STUB_WORKFLOW_REQUIREMENTS_REJECT_WIKI=1
-    export STUB_TYPED_GENERATE_EMPTY=1
     source "$LIB"
     run repl_invoke "workflow.requirements.generateDocument" "format: wiki
 docType: all"
     unset MCPSERVER_API_KEY
     unset STUB_WORKFLOW_REQUIREMENTS_REJECT_WIKI
-    unset STUB_TYPED_GENERATE_EMPTY
+    [ "$status" -eq 0 ]
+    echo "$output" | grep -q "contentBase64: UEsDBA=="
+    ! echo "$output" | grep -q "Invalid format: wiki"
+    grep -q "method=workflow.requirements.generateDocument" "$STUB_LOG"
+    grep -q "method=client.Requirements.GenerateAsync" "$STUB_LOG"
+}
+
+@test "workflow.requirements.generateDocument HTTP fallback returns wiki ZIP bytes" {
+    write_requirements_state
+    export MCPSERVER_API_KEY="test-api-key"
+    source "$LIB"
+    run _repl_requirements_generate_http_fallback "format: wiki
+docType: all"
+    unset MCPSERVER_API_KEY
     [ "$status" -eq 0 ]
     echo "$output" | grep -q "contentBase64: UEsDBA=="
     echo "$output" | grep -q "contentType: application/zip"
     echo "$output" | grep -q "fileName: requirements-wiki-documents.zip"
+    grep -q "curl_url=http://127.0.0.1:8765/mcpserver/requirements/generate?doc=all&format=wiki" "$STUB_LOG"
+}
+
+@test "workflow.requirements.generateDocument accepts JSON params because JSON is YAML" {
+    command -v node >/dev/null 2>&1 || skip "node not available"
+    write_requirements_state
+    export MCPSERVER_API_KEY="test-api-key"
+    source "$LIB"
+    run repl_invoke "workflow.requirements.generateDocument" '{"format":"wiki","docType":"all"}'
+    unset MCPSERVER_API_KEY
+    [ "$status" -eq 0 ]
+    echo "$output" | grep -q "contentBase64: UEsDBA=="
+    echo "$output" | grep -q "contentType: application/zip"
+    grep -q "curl_url=http://127.0.0.1:8765/mcpserver/requirements/generate?doc=all&format=wiki" "$STUB_LOG"
 }
 
 @test "workflow.requirements.ingestDocument passes wiki documents and timestamps to typed fallback" {
@@ -654,6 +773,102 @@ documents:
     grep -q "cwd=$SANDBOX/workspace" "$STUB_LOG"
     grep -q "MCP_WORKSPACE_PATH=$SANDBOX/workspace" "$STUB_LOG"
     grep -q "MCP_SERVER_URL=http://127.0.0.1:8765" "$STUB_LOG"
+}
+
+@test "pending import transformer emits session recovery and TODO YAML commands" {
+    command -v node >/dev/null 2>&1 || skip "node not available"
+    cat > "$SANDBOX/pending-import.json" <<'JSON'
+{
+  "createdAtUtc": "2026-05-14T05:12:23Z",
+  "createdBy": "Codex",
+  "targetMcpSession": {
+    "sourceType": "Codex",
+    "sessionId": "Codex-20260514T000000Z-import-test",
+    "title": "Import test",
+    "model": "gpt-5"
+  },
+  "turns": [
+    {
+      "requestId": "req-20260514T000100Z-imported",
+      "queryTitle": "Imported turn",
+      "queryText": "Import this turn",
+      "status": "completed-pending-import",
+      "actions": [
+        { "type": "test", "status": "completed", "description": "validated" }
+      ]
+    }
+  ],
+  "operations": [
+    {
+      "id": "todo-test",
+      "kind": "todo.create",
+      "payload": {
+        "id": "MCP-IMPORT-001",
+        "title": "Import TODO",
+        "priority": "high",
+        "section": "Backlog",
+        "implementationTasks": ["Replay through plugin"]
+      }
+    }
+  ]
+}
+JSON
+
+    run node "$PLUGIN_ROOT/lib/pending-import-to-yaml.js" "$SANDBOX/pending-import.json"
+
+    [ "$status" -eq 0 ]
+    echo "$output" | grep -q "workflow.sessionlog.importRecovery"
+    echo "$output" | grep -q "workflow.todo.create"
+}
+
+@test "workflow.sessionlog.importRecovery uses marker-auth HTTP submit before REPL" {
+    command -v node >/dev/null 2>&1 || skip "node not available"
+    write_requirements_state
+    export MCPSERVER_API_KEY="test-api-key"
+    source "$LIB"
+
+    run repl_invoke "workflow.sessionlog.importRecovery" 'sessionLog: {"sourceType":"Codex","sessionId":"Codex-20260514T000000Z-import-test","title":"Import test","status":"completed","turns":[{"requestId":"req-20260514T000100Z-imported","queryTitle":"Imported","queryText":"Import this","status":"completed","response":"done"}]}'
+
+    unset MCPSERVER_API_KEY
+    [ "$status" -eq 0 ]
+    echo "$output" | grep -q '"success":true'
+    grep -q "curl_url=http://127.0.0.1:8765/mcpserver/sessionlog" "$STUB_LOG"
+    grep -q '"sessionId":"Codex-20260514T000000Z-import-test"' "$STUB_LOG"
+    ! grep -q "method=workflow.sessionlog.importRecovery" "$STUB_LOG"
+}
+
+@test "failsafe write stores replayable generic operation under workspace .mcpServer" {
+    command -v node >/dev/null 2>&1 || skip "node not available"
+    write_requirements_state
+    source "$LIB"
+
+    failsafe_file="$(_repl_failsafe_write "workflow.todo.create" "id: MCP-FAILSAFE-001
+title: Failsafe TODO
+section: Backlog
+priority: high" "test_failure")"
+
+    [ -f "$failsafe_file" ]
+    echo "$failsafe_file" | grep -q "$SANDBOX/workspace/.mcpServer/failsafe/codex"
+    grep -q '"kind": "mcpserver-plugin-failsafe"' "$failsafe_file"
+    grep -q '"method": "workflow.todo.create"' "$failsafe_file"
+
+    run node "$PLUGIN_ROOT/lib/pending-import-to-yaml.js" "$failsafe_file"
+
+    [ "$status" -eq 0 ]
+    echo "$output" | grep -q "workflow.todo.create"
+    printf '%s\n' "$output" | cut -f2 | base64 -d | grep -q "MCP-FAILSAFE-001"
+}
+
+@test "failsafe clear removes acknowledged operation" {
+    write_requirements_state
+    source "$LIB"
+
+    failsafe_file="$(_repl_failsafe_write "workflow.requirements.createFr" "id: FR-FAILSAFE-001" "test_ack")"
+    [ -f "$failsafe_file" ]
+
+    _repl_failsafe_clear "$failsafe_file"
+
+    [ ! -e "$failsafe_file" ]
 }
 
 @test "workflow.requirements prefers compatibility marker when direct marker auth would fail" {
