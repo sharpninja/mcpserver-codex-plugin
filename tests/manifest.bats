@@ -93,7 +93,7 @@ PY
 }
 
 @test "manifest skillsPath points to every expected skill entrypoint" {
-    for skill in device enforcement graphrag requirements session todo workflow; do
+    for skill in device enforcement graphrag requirements session todo workflow workspace; do
         [ -s "$PLUGIN_ROOT/skills/$skill/SKILL.md" ]
     done
 }
@@ -121,6 +121,7 @@ PY
     for ignored_path in \
         "cache/pending/*.yaml" \
         "cache/session-state.yaml" \
+        "cache/internal-todo.yaml" \
         "cache/plan-todo-map.yaml" \
         "cache/current-turn.yaml" \
         "cache/todo-state.yaml" \
@@ -131,6 +132,7 @@ PY
 
     run git -C "$PLUGIN_ROOT" ls-files \
         "cache/session-state.yaml" \
+        "cache/internal-todo.yaml" \
         "cache/plan-todo-map.yaml" \
         "cache/current-turn.yaml" \
         "cache/todo-state.yaml" \

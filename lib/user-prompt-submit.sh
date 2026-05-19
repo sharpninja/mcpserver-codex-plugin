@@ -152,13 +152,18 @@ json_escape() {
     ' <<<"$1"
 }
 
+INTERNAL_TODO_REMINDER="Use TODO and requirements tools only as needed."
+if type _repl_internal_todo_is_enabled >/dev/null 2>&1 && _repl_internal_todo_is_enabled; then
+    INTERNAL_TODO_REMINDER="MCP-backed Codex internal TODO tracking is enabled. Mirror durable plan items through workflow.todo.* and keep only transient execution details in Codex's local checklist."
+fi
+
 # Inject a per-turn reminder into the agent's context so it sees the
 # exact contract that applies to this turn. Prioritize MCP continuity and
 # attached-device guidance first; keep verification reminders secondary.
 REMINDER="$(cat <<EOF
 A session log turn is active. Use McpServer as the default source of task continuity:
 1. Prefer session/task state and recent checkpoints over asking the user for context.
-2. Use TODO and requirements tools only as needed.
+2. ${INTERNAL_TODO_REMINDER}
 3. For attached Android validation, use adb_step for screenshot -> inspect -> act -> screenshot loops.
 4. After meaningful progress or a failed validation cycle, record/update the session log.
 5. Run code-verify.sh after source edits and stop-gate.sh before the final response.

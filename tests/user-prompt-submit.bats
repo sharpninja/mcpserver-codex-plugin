@@ -85,3 +85,16 @@ if (context.indexOf("Prefer session/task state and recent checkpoints") >= conte
         skip "No JSON parser available for hook output validation"
     fi
 }
+
+@test "user-prompt-submit emits MCP-backed internal TODO guidance when enabled" {
+    export MCP_CODEX_INTERNAL_TODO=1
+    payload='{"prompt":"Implement the next slice."}'
+
+    run bash "$USER_PROMPT_SUBMIT" <<<"$payload"
+
+    [ "$status" -eq 0 ]
+    grep -q '"status":"turn-opened"' <<<"$output"
+    grep -Fq "MCP-backed Codex internal TODO tracking is enabled." <<<"$output"
+    grep -Fq "workflow.todo.*" <<<"$output"
+    ! grep -Fq "Use TODO and requirements tools only as needed." <<<"$output"
+}

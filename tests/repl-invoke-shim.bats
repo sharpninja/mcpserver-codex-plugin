@@ -303,6 +303,47 @@ read_edits() {
     grep '^codeEdits:' "$(test_cache_file current-turn.yaml)" | head -1 | sed 's/^codeEdits:[[:space:]]*//'
 }
 
+@test "internal TODO tracking defaults off and can be toggled in cache" {
+    source "$LIB"
+
+    run repl_invoke "workflow.todo.internalTracking" ""
+    [ "$status" -eq 0 ]
+    grep -q 'enabled: false' <<<"$output"
+    grep -q 'source: default' <<<"$output"
+
+    run repl_invoke "workflow.todo.internal.enable" ""
+    [ "$status" -eq 0 ]
+    grep -q 'enabled: true' <<<"$output"
+    grep -q 'source: cache' <<<"$output"
+    grep -q '^enabled: true' "$(test_cache_file internal-todo.yaml)"
+
+    run repl_invoke "workflow.todo.internal.status" ""
+    [ "$status" -eq 0 ]
+    grep -q 'enabled: true' <<<"$output"
+    grep -q 'source: cache' <<<"$output"
+
+    run repl_invoke "workflow.todo.internal.disable" ""
+    [ "$status" -eq 0 ]
+    grep -q 'enabled: false' <<<"$output"
+    grep -q 'source: cache' <<<"$output"
+    grep -q '^enabled: false' "$(test_cache_file internal-todo.yaml)"
+}
+
+@test "internal TODO tracking env override wins over cached setting" {
+    source "$LIB"
+
+    run repl_invoke "workflow.todo.internal.disable" ""
+    [ "$status" -eq 0 ]
+
+    export MCP_CODEX_INTERNAL_TODO=on
+    run repl_invoke "workflow.todo.internal.status" ""
+    unset MCP_CODEX_INTERNAL_TODO
+
+    [ "$status" -eq 0 ]
+    grep -q 'enabled: true' <<<"$output"
+    grep -q 'source: environment' <<<"$output"
+}
+
 write_requirements_state() {
     refresh_test_cache
     cat > "$TEST_CACHE_DIR/session-state.yaml" <<EOF

@@ -1,5 +1,6 @@
 cache/pending/*.yaml
 cache/session-state.yaml
+cache/internal-todo.yaml
 cache/plan-todo-map.yaml
 cache/current-turn.yaml
 cache/todo-state.yaml

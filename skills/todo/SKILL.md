@@ -37,6 +37,35 @@ To interact with project TODOs, use the `workflow.todo.*` namespace through
 send a `type: request` envelope on stdin, receive a `type: result` or
 `type: error` envelope on stdout.
 
+## Codex Internal TODO Tracking Toggle
+
+By default, Codex keeps transient checklist state locally and uses MCP TODOs
+only when the task needs durable workspace TODO tracking. To make MCP TODOs the
+backing store for durable Codex plan items in a workspace:
+
+```yaml
+type: request
+payload:
+  requestId: req-20260409T120000Z-internal-todo-enable
+  method: workflow.todo.internal.enable
+  params: {}
+```
+
+To turn it off:
+
+```yaml
+type: request
+payload:
+  requestId: req-20260409T120000Z-internal-todo-disable
+  method: workflow.todo.internal.disable
+  params: {}
+```
+
+`workflow.todo.internal.status` reports the active state and whether it came
+from cache, default behavior, or an environment override. The same behavior can
+be forced for a process with `MCP_CODEX_INTERNAL_TODO=1` or disabled with
+`MCP_CODEX_INTERNAL_TODO=0`.
+
 ## TODO ID Naming Conventions
 
 Persist only IDs that conform to one of two patterns:

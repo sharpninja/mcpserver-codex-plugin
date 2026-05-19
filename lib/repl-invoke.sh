@@ -193,7 +193,11 @@ _repl_run_repl_with_timeout() {
     local timeout_seconds="${1:-30}"
     shift
 
-    if command -v pwsh.exe >/dev/null 2>&1 && uname -s 2>/dev/null | grep -Eqi 'mingw|msys|cygwin'; then
+    local pwsh_candidate=""
+    pwsh_candidate="$(command -v pwsh.exe 2>/dev/null || true)"
+    if [ -n "$pwsh_candidate" ] &&
+       uname -s 2>/dev/null | grep -Eqi 'mingw|msys|cygwin' &&
+       { [ ! -f "$pwsh_candidate" ] || ! head -c 2 "$pwsh_candidate" 2>/dev/null | grep -q '^#!'; }; then
         local input_file output_file error_file args_file input_path output_path error_path args_path executable_path
         input_file="${REPL_INVOKE_CACHE_DIR}/repl-input.$$.$RANDOM.yaml"
         output_file="${REPL_INVOKE_CACHE_DIR}/repl-output.$$.$RANDOM.yaml"
@@ -202,7 +206,13 @@ _repl_run_repl_with_timeout() {
         mkdir -p "$REPL_INVOKE_CACHE_DIR"
         cat > "$input_file"
         : > "$args_file"
-        local repl_argument
+        local repl_argument executable_raw executable_kind
+        executable_raw="$(command -v "$1" 2>/dev/null || printf '%s' "$1")"
+        executable_kind="native"
+        if [ -f "$executable_raw" ] && head -c 2 "$executable_raw" 2>/dev/null | grep -q '^#!'; then
+            executable_kind="bash-script"
+            printf '%s\n' "$(cygpath -w "$executable_raw" 2>/dev/null || printf '%s' "$executable_raw")" >> "$args_file"
+        fi
         for repl_argument in "${@:2}"; do
             printf '%s\n' "$repl_argument" >> "$args_file"
         done
@@ -210,7 +220,11 @@ _repl_run_repl_with_timeout() {
         output_path="$(cygpath -w "$output_file" 2>/dev/null || printf '%s' "$output_file")"
         error_path="$(cygpath -w "$error_file" 2>/dev/null || printf '%s' "$error_file")"
         args_path="$(cygpath -w "$args_file" 2>/dev/null || printf '%s' "$args_file")"
-        executable_path="$(command -v "$1" 2>/dev/null || printf '%s' "$1")"
+        if [ "$executable_kind" = "bash-script" ]; then
+            executable_path="$(command -v bash.exe 2>/dev/null || command -v bash 2>/dev/null || printf '%s' bash)"
+        else
+            executable_path="$executable_raw"
+        fi
         executable_path="$(cygpath -w "$executable_path" 2>/dev/null || printf '%s' "$executable_path")"
 
         REPL_TIMEOUT_SECONDS="$timeout_seconds" \
@@ -340,6 +354,51 @@ _repl_workflow_todo_is_mutation() {
         create|update|delete) return 0 ;;
         *) return 1 ;;
     esac
+}
+
+_repl_bool_to_enabled() {
+    local value="${1:-}"
+    value="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]' | sed 's/^"\(.*\)"$/\1/; s/^'\''\(.*\)'\''$/\1/')"
+    case "$value" in
+        1|true|yes|on|enabled|enable|mcp|mcpserver) printf 'true' ;;
+        0|false|no|off|disabled|disable|codex|local) printf 'false' ;;
+        *) return 1 ;;
+    esac
+}
+
+_repl_internal_todo_state_file() {
+    printf '%s/internal-todo.yaml' "$REPL_INVOKE_CACHE_DIR"
+}
+
+_repl_internal_todo_mode_value() {
+    local value mode state_file
+
+    value="${MCP_CODEX_INTERNAL_TODO:-${MCPSERVER_CODEX_INTERNAL_TODO:-${CODEX_MCP_TODO:-}}}"
+    if [ -n "$value" ]; then
+        mode="$(_repl_bool_to_enabled "$value" 2>/dev/null || true)"
+        if [ -n "$mode" ]; then
+            printf '%s environment\n' "$mode"
+            return 0
+        fi
+    fi
+
+    state_file="$(_repl_internal_todo_state_file)"
+    value="$(_repl_state_value "$state_file" "enabled" 2>/dev/null || true)"
+    if [ -n "$value" ]; then
+        mode="$(_repl_bool_to_enabled "$value" 2>/dev/null || true)"
+        if [ -n "$mode" ]; then
+            printf '%s cache\n' "$mode"
+            return 0
+        fi
+    fi
+
+    printf 'false default\n'
+}
+
+_repl_internal_todo_is_enabled() {
+    local mode
+    mode="$(_repl_internal_todo_mode_value | awk '{print $1}')"
+    [ "$mode" = "true" ]
 }
 
 _repl_workflow_requirements_is_mutation() {
@@ -2130,16 +2189,6 @@ _repl_workflow_requirements() {
         failsafe_file="$(_repl_failsafe_write "$method" "$params_yaml" "requirements_${operation}")"
     fi
 
-    if [ "$operation" = "generateDocument" ] && [ "$(_repl_yaml_get "$params_yaml" "format")" = "wiki" ]; then
-        response="$(_repl_requirements_generate_http_fallback "$params_yaml" 2>&1)"
-        status=$?
-        if [ $status -eq 0 ] && _repl_response_is_nonempty_success "$response"; then
-            _repl_failsafe_clear "$failsafe_file"
-            printf '%s\n' "$response"
-            return 0
-        fi
-    fi
-
     workflow_params="$(_repl_requirements_workflow_params "$operation" "$params_yaml")"
     response="$(_repl_invoke_raw_in_workspace "$method" "$workflow_params" "compat" 2>&1)"
     status=$?
@@ -2900,6 +2949,42 @@ ${params}"
     _repl_workflow_todo "workflow.todo.update" "$combined"
 }
 
+_repl_workflow_todo_internal_tracking() {
+    local params="$1"
+    local requested="" mode source state_file tmp
+
+    if [ -n "$params" ]; then
+        requested="$(_repl_yaml_get "$params" "enabled" 2>/dev/null || true)"
+        [ -z "$requested" ] && requested="$(_repl_yaml_get "$params" "mode" 2>/dev/null || true)"
+        [ -z "$requested" ] && requested="$(_repl_yaml_get "$params" "mcpTodo" 2>/dev/null || true)"
+        [ -z "$requested" ] && requested="$(_repl_yaml_get "$params" "mcpBacked" 2>/dev/null || true)"
+    fi
+
+    state_file="$(_repl_internal_todo_state_file)"
+    if [ -n "$requested" ]; then
+        mode="$(_repl_bool_to_enabled "$requested" 2>/dev/null || true)"
+        if [ -z "$mode" ]; then
+            printf 'type: error\npayload:\n'
+            printf '  code: invalid_internal_todo_mode\n'
+            printf '  message: internal TODO tracking mode must be enabled/disabled or true/false\n'
+            return 1
+        fi
+
+        mkdir -p "$REPL_INVOKE_CACHE_DIR"
+        tmp="${state_file}.tmp.$$"
+        cat > "$tmp" <<EOF
+enabled: ${mode}
+updatedAt: $(_repl_now_iso)
+EOF
+        mv "$tmp" "$state_file"
+    fi
+
+    read -r mode source < <(_repl_internal_todo_mode_value)
+    _repl_emit_response "  enabled: ${mode}
+  source: ${source}
+  stateFile: ${state_file}"
+}
+
 repl_invoke() {
     local method="$1"
     local params_yaml="${2:-}"
@@ -2985,6 +3070,18 @@ repl_invoke() {
             _repl_workflow_todo_update_selected "$params_yaml"
             return $?
             ;;
+        workflow.todo.internalTracking|workflow.todo.internal.status)
+            _repl_workflow_todo_internal_tracking "$params_yaml"
+            return $?
+            ;;
+        workflow.todo.internal.enable)
+            _repl_workflow_todo_internal_tracking "enabled: true"
+            return $?
+            ;;
+        workflow.todo.internal.disable)
+            _repl_workflow_todo_internal_tracking "enabled: false"
+            return $?
+            ;;
         workflow.requirements.*)
             _repl_workflow_requirements "$method" "$params_yaml"
             return $?
@@ -3027,4 +3124,4 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     exit $?
 fi
 
-export -f repl_invoke repl_build_envelope _repl_compat_marker_endpoint_field _repl_compat_marker_field _repl_create_compat_marker _repl_failsafe_clear _repl_failsafe_dir _repl_failsafe_plugin_name _repl_failsafe_workspace_root _repl_failsafe_write _repl_first_param_text _repl_invoke_raw _repl_invoke_raw_in_workspace _repl_invoke_with_fallback _repl_bootstrap_state _repl_emit_response _repl_generate_session_id _repl_json_escape _repl_normalized_actions_block _repl_normalized_dialog_items_block _repl_param_text _repl_path_for_bash _repl_path_for_repl _repl_pending_import_file _repl_pending_import_todo_exists _repl_persist_turn _repl_requirements_bootstrap_state _repl_requirements_generate_http_fallback _repl_requirements_normalize_generate_response _repl_requirements_typed_doc_type _repl_requirements_typed_method _repl_requirements_typed_params _repl_requirements_workflow_doc_type _repl_requirements_workflow_params _repl_requirement_list_field _repl_response_has_empty_result _repl_response_is_error _repl_response_is_nonempty_success _repl_run_repl_with_timeout _repl_session_meta _repl_session_state_value _repl_sessionlog_import_recovery_http_fallback _repl_sessionlog_submit_http_fallback _repl_state_value _repl_submit_session _repl_todo_http_fallback _repl_todo_json_body _repl_turns_block _repl_url_path_segment _repl_workflow_append_actions _repl_workflow_append_dialog _repl_workflow_begin_turn _repl_workflow_bootstrap _repl_workflow_complete_turn _repl_workflow_import_pending _repl_workflow_import_recovery _repl_workflow_open_session _repl_workflow_query_history _repl_workflow_requirements _repl_workflow_requirements_is_mutation _repl_workflow_todo _repl_workflow_todo_is_mutation _repl_workflow_todo_select _repl_workflow_todo_update_selected _repl_workflow_update_turn _repl_yaml_block_get _repl_yaml_field _repl_yaml_get 2>/dev/null || true
+export -f repl_invoke repl_build_envelope _repl_bool_to_enabled _repl_compat_marker_endpoint_field _repl_compat_marker_field _repl_create_compat_marker _repl_failsafe_clear _repl_failsafe_dir _repl_failsafe_plugin_name _repl_failsafe_workspace_root _repl_failsafe_write _repl_first_param_text _repl_internal_todo_is_enabled _repl_internal_todo_mode_value _repl_internal_todo_state_file _repl_invoke_raw _repl_invoke_raw_in_workspace _repl_invoke_with_fallback _repl_bootstrap_state _repl_emit_response _repl_generate_session_id _repl_json_escape _repl_normalized_actions_block _repl_normalized_dialog_items_block _repl_param_text _repl_path_for_bash _repl_path_for_repl _repl_pending_import_file _repl_pending_import_todo_exists _repl_persist_turn _repl_requirements_bootstrap_state _repl_requirements_generate_http_fallback _repl_requirements_normalize_generate_response _repl_requirements_typed_doc_type _repl_requirements_typed_method _repl_requirements_typed_params _repl_requirements_workflow_doc_type _repl_requirements_workflow_params _repl_requirement_list_field _repl_response_has_empty_result _repl_response_is_error _repl_response_is_nonempty_success _repl_run_repl_with_timeout _repl_session_meta _repl_session_state_value _repl_sessionlog_import_recovery_http_fallback _repl_sessionlog_submit_http_fallback _repl_state_value _repl_submit_session _repl_todo_http_fallback _repl_todo_json_body _repl_turns_block _repl_url_path_segment _repl_workflow_append_actions _repl_workflow_append_dialog _repl_workflow_begin_turn _repl_workflow_bootstrap _repl_workflow_complete_turn _repl_workflow_import_pending _repl_workflow_import_recovery _repl_workflow_open_session _repl_workflow_query_history _repl_workflow_requirements _repl_workflow_requirements_is_mutation _repl_workflow_todo _repl_workflow_todo_internal_tracking _repl_workflow_todo_is_mutation _repl_workflow_todo_select _repl_workflow_todo_update_selected _repl_workflow_update_turn _repl_yaml_block_get _repl_yaml_field _repl_yaml_get 2>/dev/null || true
