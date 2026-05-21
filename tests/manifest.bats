@@ -105,7 +105,9 @@ PY
         lib/cache-scope.sh \
         lib/code-verify.sh \
         lib/ensure-repl.sh \
+        lib/final-response.sh \
         lib/marker-resolver.sh \
+        lib/mcp.codex.status.sh \
         lib/repl-invoke.sh \
         lib/session-start.sh \
         lib/stop-gate.sh \
@@ -115,6 +117,8 @@ PY
         read -r first_line < "$PLUGIN_ROOT/$script"
         [ "$first_line" = "#!/usr/bin/env bash" ]
     done
+
+    [ -s "$PLUGIN_ROOT/Invoke-CodexMcpPlugin.ps1" ]
 }
 
 @test "mutable cache state is ignored and not shipped as tracked content" {
