@@ -51,8 +51,41 @@ if [ "$method" = "workflow.requirements.generateDocument" ] && [ "${STUB_WORKFLO
     fi
 fi
 
+if [ "$method" = "workflow.requirements.createFr" ] && [ "${STUB_WORKFLOW_REQUIREMENTS_CREATE_IGNORES_PRIORITY:-}" = "1" ]; then
+    id="$(extract_yaml_value id)"
+    title="$(extract_yaml_value title)"
+    body="$(extract_yaml_value description)"
+    printf 'type: result\npayload:\n  result:\n    item:\n      id: %s\n      title: %s\n      description: %s\n      priority: medium\n' "$id" "$title" "$body"
+    exit 0
+fi
+
+if [ "${STUB_WORKFLOW_REQUIREMENTS_GET_SUCCEEDS:-}" = "1" ]; then
+    case "$method" in
+        workflow.requirements.getFr)
+            id="$(extract_yaml_value id)"
+            printf 'type: result\npayload:\n  result:\n    id: %s\n    title: Workflow FR\n    description: Workflow FR body\n    priority: medium\n    status: pending\n    notes: Workflow notes\n' "$id"
+            exit 0
+            ;;
+        workflow.requirements.getTr)
+            id="$(extract_yaml_value id)"
+            printf 'type: result\npayload:\n  result:\n    id: %s\n    title: Workflow TR\n    description: Workflow TR body\n    priority: medium\n    status: pending\n    notes: Workflow TR notes\n' "$id"
+            exit 0
+            ;;
+        workflow.requirements.getTest)
+            id="$(extract_yaml_value id)"
+            printf 'type: result\npayload:\n  result:\n    id: %s\n    title: Workflow TEST\n    condition: Workflow TEST condition\n    priority: medium\n    status: pending\n    notes: Workflow TEST notes\n' "$id"
+            exit 0
+            ;;
+    esac
+fi
+
 if [[ "$method" == "client.SessionLog.QueryAsync" || "$method" == client.Todo.* ]] && [ "${STUB_REQUIRE_COMPAT_AUTH:-}" = "1" ] && [ "${MCP_WORKSPACE_PATH:-}" = "${STUB_AUTH_FAIL_WORKSPACE_PATH:-}" ]; then
     printf 'type: error\npayload:\n  code: method_invocation_error\n  message: Authentication required: no credential is configured on this client.\n'
+    exit 0
+fi
+
+if [ "$method" = "client.SessionLog.QueryAsync" ] && [ "${STUB_SESSIONLOG_QUERY_ERROR:-}" = "1" ]; then
+    printf 'type: error\npayload:\n  code: method_invocation_error\n  message: Session log query rejected by test stub.\n'
     exit 0
 fi
 
@@ -80,8 +113,14 @@ case "$method" in
         id="$(extract_yaml_value id)"
         title="$(extract_yaml_value title)"
         body="$(extract_yaml_value body)"
-        printf '%s|%s|%s\n' "$id" "$title" "$body" >> "$STUB_DB"
+        priority="$(extract_yaml_value priority)"
+        printf '%s|%s|%s|%s\n' "$id" "$title" "$body" "$priority" >> "$STUB_DB"
+        if [ "${STUB_TYPED_CREATE_EMPTY:-}" = "1" ]; then
+            printf 'type: result\npayload:\n  result:\n'
+            exit 0
+        fi
         printf 'type: result\npayload:\n  result:\n    item:\n      id: %s\n      title: %s\n      description: %s\n' "$id" "$title" "$body"
+        [ -n "$priority" ] && printf '      priority: %s\n' "$priority"
         ;;
     client.Requirements.ListFrAsync)
         if [ "${STUB_REQUIRE_COMPAT_AUTH:-}" = "1" ] && [ "${MCP_WORKSPACE_PATH:-}" = "${STUB_AUTH_FAIL_WORKSPACE_PATH:-}" ]; then
@@ -90,16 +129,25 @@ case "$method" in
         fi
         printf 'type: result\npayload:\n  result:\n    items:\n'
         if [ -f "$STUB_DB" ]; then
-            while IFS='|' read -r id title body; do
+            while IFS='|' read -r id title body priority; do
                 [ -z "$id" ] && continue
                 printf '      - id: %s\n        title: %s\n        description: %s\n' "$id" "$title" "$body"
+                [ -n "$priority" ] && printf '        priority: %s\n' "$priority"
             done < "$STUB_DB"
         fi
         printf '    totalCount: %s\n' "$(wc -l < "$STUB_DB" 2>/dev/null || printf 0)"
         ;;
     client.Requirements.GetFrAsync)
         id="$(extract_yaml_value id)"
-        printf 'type: result\npayload:\n  result:\n    item:\n      id: %s\n      title: Stored FR\n      description: Stored body\n' "$id"
+        printf 'type: result\npayload:\n  result:\n    item:\n      id: %s\n      title: Stored FR\n      description: Stored body\n      priority: medium\n      status: pending\n      area: MCP\n      notes: Stored notes\n' "$id"
+        ;;
+    client.Requirements.GetTrAsync)
+        id="$(extract_yaml_value id)"
+        printf 'type: result\npayload:\n  result:\n    item:\n      id: %s\n      title: Stored TR\n      description: Stored TR body\n      priority: medium\n      status: pending\n      area: MCP\n      subarea: Plugin\n      notes: Stored TR notes\n' "$id"
+        ;;
+    client.Requirements.GetTestAsync)
+        id="$(extract_yaml_value id)"
+        printf 'type: result\npayload:\n  result:\n    item:\n      id: %s\n      title: Stored TEST\n      condition: Stored TEST condition\n      priority: medium\n      status: pending\n      area: MCP\n      testType: integration\n      notes: Stored TEST notes\n' "$id"
         ;;
     client.Requirements.GenerateAsync)
         doc="$(extract_yaml_value doc)"
@@ -114,7 +162,14 @@ case "$method" in
             printf 'type: result\npayload:\n  result:\n    content: |\n      # Requirement Traceability Matrix\n      doc=%s\n    format: markdown\n' "$doc"
         fi
         ;;
-    client.Requirements.GetTrAsync|client.Requirements.GetTestAsync|client.Requirements.DeleteFrAsync|client.Requirements.DeleteTrAsync|client.Requirements.DeleteTestAsync|client.Requirements.ListTrAsync|client.Requirements.ListTestAsync|client.Requirements.ListMappingsAsync|client.Requirements.CreateTrAsync|client.Requirements.UpdateFrAsync|client.Requirements.UpdateTrAsync|client.Requirements.CreateTestAsync|client.Requirements.UpdateTestAsync|client.Requirements.UpsertMappingAsync|client.Requirements.DeleteMappingAsync|client.Requirements.IngestAsync)
+    client.Requirements.CreateTrAsync|client.Requirements.CreateTestAsync)
+        if [ "${STUB_TYPED_CREATE_EMPTY:-}" = "1" ]; then
+            printf 'type: result\npayload:\n  result:\n'
+            exit 0
+        fi
+        printf 'type: result\npayload:\n  result:\n    ok: true\n'
+        ;;
+    client.Requirements.DeleteFrAsync|client.Requirements.DeleteTrAsync|client.Requirements.DeleteTestAsync|client.Requirements.ListTrAsync|client.Requirements.ListTestAsync|client.Requirements.ListMappingsAsync|client.Requirements.UpdateFrAsync|client.Requirements.UpdateTrAsync|client.Requirements.UpdateTestAsync|client.Requirements.UpsertMappingAsync|client.Requirements.DeleteMappingAsync|client.Requirements.IngestAsync)
         printf 'type: result\npayload:\n  result:\n    ok: true\n'
         ;;
     *)
@@ -700,18 +755,149 @@ priority: medium"
     grep -q "method=client.Requirements.ListFrAsync" "$STUB_LOG"
 }
 
-@test "workflow.requirements.updateFr falls back when workflow emits auth error" {
+@test "workflow.requirements.updateFr uses typed client even when workflow would emit auth error" {
     write_requirements_state
     export STUB_WORKFLOW_REQUIREMENTS_AUTH_ERROR=1
     source "$LIB"
     run repl_invoke "workflow.requirements.updateFr" "id: FR-MCP-901
 title: Requirements shim
-description: Plugin wrapper must route update calls through typed fallback"
+description: Plugin wrapper must route update calls through typed fallback
+priority: high
+status: in_progress
+notes: Preserve requirement metadata"
     unset STUB_WORKFLOW_REQUIREMENTS_AUTH_ERROR
     [ "$status" -eq 0 ]
     ! echo "$output" | grep -q "Authentication required"
-    grep -q "method=workflow.requirements.updateFr" "$STUB_LOG"
+    ! grep -q "method=workflow.requirements.updateFr" "$STUB_LOG"
     grep -q "method=client.Requirements.UpdateFrAsync" "$STUB_LOG"
+    grep -Eq "input:[[:space:]]+priority: high" "$STUB_LOG"
+    grep -Eq "input:[[:space:]]+status: in_progress" "$STUB_LOG"
+    grep -Eq "input:[[:space:]]+notes: Preserve requirement metadata" "$STUB_LOG"
+}
+
+@test "workflow.requirements.updateFr hydrates existing entry for priority-only update" {
+    write_requirements_state
+    source "$LIB"
+
+    run repl_invoke "workflow.requirements.updateFr" "id: FR-MCP-901
+priority: high
+notes: Live priority repair"
+
+    [ "$status" -eq 0 ]
+    grep -q "method=client.Requirements.GetFrAsync" "$STUB_LOG"
+    grep -q "method=client.Requirements.UpdateFrAsync" "$STUB_LOG"
+    grep -Eq "input:[[:space:]]+title: Stored FR" "$STUB_LOG"
+    grep -Eq "input:[[:space:]]+body: Stored body" "$STUB_LOG"
+    grep -Eq "input:[[:space:]]+priority: high" "$STUB_LOG"
+    grep -Eq "input:[[:space:]]+status: pending" "$STUB_LOG"
+    grep -Eq "input:[[:space:]]+notes: Live priority repair" "$STUB_LOG"
+}
+
+@test "workflow.requirements.updateFr hydrates from workflow get before typed get" {
+    write_requirements_state
+    export STUB_WORKFLOW_REQUIREMENTS_GET_SUCCEEDS=1
+    source "$LIB"
+
+    run repl_invoke "workflow.requirements.updateFr" "id: FR-MCP-903
+priority: high"
+
+    unset STUB_WORKFLOW_REQUIREMENTS_GET_SUCCEEDS
+    [ "$status" -eq 0 ]
+    grep -q "method=workflow.requirements.getFr" "$STUB_LOG"
+    ! grep -q "method=client.Requirements.GetFrAsync" "$STUB_LOG"
+    grep -q "method=client.Requirements.UpdateFrAsync" "$STUB_LOG"
+    grep -Eq "input:[[:space:]]+title: Workflow FR" "$STUB_LOG"
+    grep -Eq "input:[[:space:]]+body: Workflow FR body" "$STUB_LOG"
+    grep -Eq "input:[[:space:]]+priority: high" "$STUB_LOG"
+}
+
+@test "workflow.requirements update typed fallbacks preserve TR and TEST metadata" {
+    write_requirements_state
+    export STUB_WORKFLOW_REQUIREMENTS_AUTH_ERROR=1
+    source "$LIB"
+
+    run repl_invoke "workflow.requirements.updateTr" "id: TR-MCP-PLUGIN-901
+title: Requirements shim TR
+description: Plugin wrapper must route TR metadata
+priority: high
+status: completed
+notes: TR metadata"
+    [ "$status" -eq 0 ]
+
+    run repl_invoke "workflow.requirements.updateTest" "id: TEST-MCP-901
+title: Requirements shim TEST
+description: Plugin wrapper must route TEST metadata
+priority: high
+status: completed
+notes: TEST metadata"
+    unset STUB_WORKFLOW_REQUIREMENTS_AUTH_ERROR
+    [ "$status" -eq 0 ]
+
+    grep -q "method=client.Requirements.UpdateTrAsync" "$STUB_LOG"
+    grep -q "method=client.Requirements.UpdateTestAsync" "$STUB_LOG"
+    grep -Eq "input:[[:space:]]+priority: high" "$STUB_LOG"
+    grep -Eq "input:[[:space:]]+status: completed" "$STUB_LOG"
+    grep -Eq "input:[[:space:]]+notes: TR metadata" "$STUB_LOG"
+    grep -Eq "input:[[:space:]]+notes: TEST metadata" "$STUB_LOG"
+}
+
+@test "workflow.requirements update typed fallbacks hydrate TR and TEST priority-only updates" {
+    write_requirements_state
+    source "$LIB"
+
+    run repl_invoke "workflow.requirements.updateTr" "id: TR-MCP-PLUGIN-901
+priority: high"
+    [ "$status" -eq 0 ]
+
+    run repl_invoke "workflow.requirements.updateTest" "id: TEST-MCP-901
+priority: high"
+    [ "$status" -eq 0 ]
+
+    grep -q "method=client.Requirements.GetTrAsync" "$STUB_LOG"
+    grep -q "method=client.Requirements.GetTestAsync" "$STUB_LOG"
+    grep -Eq "input:[[:space:]]+title: Stored TR" "$STUB_LOG"
+    grep -Eq "input:[[:space:]]+body: Stored TR body" "$STUB_LOG"
+    grep -Eq "input:[[:space:]]+title: Stored TEST" "$STUB_LOG"
+    grep -Eq "input:[[:space:]]+condition: Stored TEST condition" "$STUB_LOG"
+    [ "$(grep -Ec "input:[[:space:]]+priority: high" "$STUB_LOG")" -ge 2 ]
+}
+
+@test "workflow.requirements.createFr uses typed client so workflow cannot swallow high priority" {
+    write_requirements_state
+    export STUB_WORKFLOW_REQUIREMENTS_CREATE_IGNORES_PRIORITY=1
+    source "$LIB"
+
+    run repl_invoke "workflow.requirements.createFr" "id: FR-MCP-902
+title: High priority FR
+description: High priority must survive create.
+priority: high
+area: MCP"
+
+    unset STUB_WORKFLOW_REQUIREMENTS_CREATE_IGNORES_PRIORITY
+    [ "$status" -eq 0 ]
+    echo "$output" | grep -q "priority: high"
+    grep -q "method=client.Requirements.CreateFrAsync" "$STUB_LOG"
+    ! grep -q "method=workflow.requirements.createFr" "$STUB_LOG"
+    grep -Eq "input:[[:space:]]+priority: high" "$STUB_LOG"
+}
+
+@test "workflow.requirements.createFr hydrates empty typed create result" {
+    write_requirements_state
+    export STUB_TYPED_CREATE_EMPTY=1
+    source "$LIB"
+
+    run repl_invoke "workflow.requirements.createFr" "id: FR-MCP-904
+title: Empty typed create result
+description: Create returns an empty result but still persists.
+priority: high
+area: MCP"
+
+    unset STUB_TYPED_CREATE_EMPTY
+    [ "$status" -eq 0 ]
+    echo "$output" | grep -q "FR-MCP-904"
+    grep -q "method=client.Requirements.CreateFrAsync" "$STUB_LOG"
+    grep -q "method=client.Requirements.GetFrAsync" "$STUB_LOG"
+    ! grep -q "method=workflow.requirements.createFr" "$STUB_LOG"
 }
 
 @test "workflow.requirements.createFr listFr getFr works through typed fallback" {

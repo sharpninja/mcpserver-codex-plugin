@@ -408,6 +408,19 @@ _repl_workflow_requirements_is_mutation() {
     esac
 }
 
+_repl_workflow_requirements_prefers_typed() {
+    if [ "${MCP_CODEX_REQUIREMENTS_PREFER_WORKFLOW_CREATE:-}" = "1" ]; then
+        case "${1:-}" in
+            createTr|createTest) return 1 ;;
+        esac
+    fi
+
+    case "${1:-}" in
+        createFr|updateFr|createTr|updateTr|createTest|updateTest) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 _repl_url_path_segment() {
     printf '%s' "${1:-}" \
         | sed 's/%/%25/g; s/ /%20/g; s#/#%2F#g; s/?/%3F/g; s/#/%23/g; s/&/%26/g'
@@ -1119,10 +1132,138 @@ _repl_requirements_typed_method() {
     esac
 }
 
+_repl_requirements_update_get_method() {
+    case "${1:-}" in
+        updateFr) printf 'client.Requirements.GetFrAsync' ;;
+        updateTr) printf 'client.Requirements.GetTrAsync' ;;
+        updateTest) printf 'client.Requirements.GetTestAsync' ;;
+        *) return 1 ;;
+    esac
+}
+
+_repl_requirements_create_get_method() {
+    case "${1:-}" in
+        createFr) printf 'client.Requirements.GetFrAsync' ;;
+        createTr) printf 'client.Requirements.GetTrAsync' ;;
+        createTest) printf 'client.Requirements.GetTestAsync' ;;
+        *) return 1 ;;
+    esac
+}
+
+_repl_requirements_create_workflow_get_method() {
+    case "${1:-}" in
+        createFr) printf 'workflow.requirements.getFr' ;;
+        createTr) printf 'workflow.requirements.getTr' ;;
+        createTest) printf 'workflow.requirements.getTest' ;;
+        *) return 1 ;;
+    esac
+}
+
+_repl_requirements_created_response_after_empty_success() {
+    local operation="$1"
+    local params_yaml="${2:-}"
+    local response="${3:-}"
+    local id get_method workflow_get_method get_params get_response status
+
+    _repl_response_is_error "$response" && return 1
+    _repl_response_has_empty_result "$response" || return 1
+
+    id="$(_repl_yaml_get "$params_yaml" "id")"
+    [ -n "$id" ] || return 1
+
+    workflow_get_method="$(_repl_requirements_create_workflow_get_method "$operation" 2>/dev/null || true)"
+    get_method="$(_repl_requirements_create_get_method "$operation")" || return 1
+    get_params="$(printf 'id: %s\n' "$id")"
+
+    if [ -n "$workflow_get_method" ]; then
+        get_response="$(_repl_invoke_raw_in_workspace "$workflow_get_method" "$get_params" "compat" 2>&1)"
+        status=$?
+        if [ $status -eq 0 ] && _repl_response_is_nonempty_success "$get_response"; then
+            printf '%s\n' "$get_response"
+            return 0
+        fi
+
+        get_response="$(_repl_invoke_raw_in_workspace "$workflow_get_method" "$get_params" 2>&1)"
+        status=$?
+        if [ $status -eq 0 ] && _repl_response_is_nonempty_success "$get_response"; then
+            printf '%s\n' "$get_response"
+            return 0
+        fi
+    fi
+
+    get_response="$(_repl_invoke_raw_in_workspace "$get_method" "$get_params" "compat" 2>&1)"
+    status=$?
+    if [ $status -eq 0 ] && _repl_response_is_nonempty_success "$get_response"; then
+        printf '%s\n' "$get_response"
+        return 0
+    fi
+
+    get_response="$(_repl_invoke_raw_in_workspace "$get_method" "$get_params" 2>&1)"
+    status=$?
+    if [ $status -eq 0 ] && _repl_response_is_nonempty_success "$get_response"; then
+        printf '%s\n' "$get_response"
+        return 0
+    fi
+
+    return 1
+}
+
+_repl_requirements_update_workflow_get_method() {
+    case "${1:-}" in
+        updateFr) printf 'workflow.requirements.getFr' ;;
+        updateTr) printf 'workflow.requirements.getTr' ;;
+        updateTest) printf 'workflow.requirements.getTest' ;;
+        *) return 1 ;;
+    esac
+}
+
+_repl_requirements_existing_for_update() {
+    local operation="$1"
+    local id="$2"
+    local get_method workflow_get_method get_params response status
+
+    [ -n "$id" ] || return 1
+    get_method="$(_repl_requirements_update_get_method "$operation")" || return 1
+    get_params="$(printf 'id: %s\n' "$id")"
+
+    workflow_get_method="$(_repl_requirements_update_workflow_get_method "$operation" 2>/dev/null || true)"
+    if [ -n "$workflow_get_method" ]; then
+        response="$(_repl_invoke_raw_in_workspace "$workflow_get_method" "$get_params" "compat" 2>&1)"
+        status=$?
+        if [ $status -eq 0 ] && _repl_response_is_nonempty_success "$response"; then
+            printf '%s\n' "$response"
+            return 0
+        fi
+
+        response="$(_repl_invoke_raw_in_workspace "$workflow_get_method" "$get_params" 2>&1)"
+        status=$?
+        if [ $status -eq 0 ] && _repl_response_is_nonempty_success "$response"; then
+            printf '%s\n' "$response"
+            return 0
+        fi
+    fi
+
+    response="$(_repl_invoke_raw_in_workspace "$get_method" "$get_params" "compat" 2>&1)"
+    status=$?
+    if [ $status -eq 0 ] && _repl_response_is_nonempty_success "$response"; then
+        printf '%s\n' "$response"
+        return 0
+    fi
+
+    response="$(_repl_invoke_raw_in_workspace "$get_method" "$get_params" 2>&1)"
+    status=$?
+    if [ $status -eq 0 ] && _repl_response_is_nonempty_success "$response"; then
+        printf '%s\n' "$response"
+        return 0
+    fi
+
+    return 1
+}
+
 _repl_requirements_typed_params() {
     local operation="$1"
     local params_yaml="${2:-}"
-    local id title body fr_id doc_type format content documents_block source_format preferred_wiki_format
+    local id title body priority status notes area subarea test_type fr_id doc_type format content documents_block source_format preferred_wiki_format existing
 
     case "$operation" in
         listFr|listTr|listTest|listMappings)
@@ -1136,48 +1277,110 @@ _repl_requirements_typed_params() {
             id="$(_repl_yaml_get "$params_yaml" "id")"
             title="$(_repl_yaml_get "$params_yaml" "title")"
             body="$(_repl_first_param_text "$params_yaml" "description" "body")"
+            priority="$(_repl_yaml_get "$params_yaml" "priority")"
+            area="$(_repl_yaml_get "$params_yaml" "area")"
+            notes="$(_repl_yaml_get "$params_yaml" "notes")"
             printf 'request:\n'
             _repl_yaml_field "  " "id" "$id"
             _repl_yaml_field "  " "title" "$title"
             _repl_yaml_field "  " "body" "$body"
+            _repl_yaml_field "  " "priority" "$priority"
+            _repl_yaml_field "  " "area" "$area"
+            _repl_yaml_field "  " "notes" "$notes"
             ;;
         updateFr)
             id="$(_repl_yaml_get "$params_yaml" "id")"
             title="$(_repl_yaml_get "$params_yaml" "title")"
             body="$(_repl_first_param_text "$params_yaml" "description" "body")"
+            priority="$(_repl_yaml_get "$params_yaml" "priority")"
+            status="$(_repl_yaml_get "$params_yaml" "status")"
+            notes="$(_repl_yaml_get "$params_yaml" "notes")"
+            existing="$(_repl_requirements_existing_for_update "$operation" "$id" 2>/dev/null || true)"
+            [ -z "$title" ] && title="$(_repl_yaml_get "$existing" "title")"
+            [ -z "$body" ] && body="$(_repl_first_param_text "$existing" "description" "body")"
+            [ -z "$priority" ] && priority="$(_repl_yaml_get "$existing" "priority")"
+            [ -z "$status" ] && status="$(_repl_yaml_get "$existing" "status")"
+            [ -z "$notes" ] && notes="$(_repl_yaml_get "$existing" "notes")"
             printf 'id: %s\nrequest:\n' "$id"
             _repl_yaml_field "  " "title" "$title"
             _repl_yaml_field "  " "body" "$body"
+            _repl_yaml_field "  " "priority" "$priority"
+            _repl_yaml_field "  " "status" "$status"
+            _repl_yaml_field "  " "notes" "$notes"
             ;;
         createTr)
             id="$(_repl_yaml_get "$params_yaml" "id")"
             title="$(_repl_yaml_get "$params_yaml" "title")"
             body="$(_repl_first_param_text "$params_yaml" "description" "body")"
+            priority="$(_repl_yaml_get "$params_yaml" "priority")"
+            area="$(_repl_yaml_get "$params_yaml" "area")"
+            subarea="$(_repl_yaml_get "$params_yaml" "subarea")"
+            notes="$(_repl_yaml_get "$params_yaml" "notes")"
             printf 'request:\n'
             _repl_yaml_field "  " "id" "$id"
             _repl_yaml_field "  " "title" "$title"
             _repl_yaml_field "  " "body" "$body"
+            _repl_yaml_field "  " "priority" "$priority"
+            _repl_yaml_field "  " "area" "$area"
+            _repl_yaml_field "  " "subarea" "$subarea"
+            _repl_yaml_field "  " "notes" "$notes"
             ;;
         updateTr)
             id="$(_repl_yaml_get "$params_yaml" "id")"
             title="$(_repl_yaml_get "$params_yaml" "title")"
             body="$(_repl_first_param_text "$params_yaml" "description" "body")"
+            priority="$(_repl_yaml_get "$params_yaml" "priority")"
+            status="$(_repl_yaml_get "$params_yaml" "status")"
+            notes="$(_repl_yaml_get "$params_yaml" "notes")"
+            existing="$(_repl_requirements_existing_for_update "$operation" "$id" 2>/dev/null || true)"
+            [ -z "$title" ] && title="$(_repl_yaml_get "$existing" "title")"
+            [ -z "$body" ] && body="$(_repl_first_param_text "$existing" "description" "body")"
+            [ -z "$priority" ] && priority="$(_repl_yaml_get "$existing" "priority")"
+            [ -z "$status" ] && status="$(_repl_yaml_get "$existing" "status")"
+            [ -z "$notes" ] && notes="$(_repl_yaml_get "$existing" "notes")"
             printf 'id: %s\nrequest:\n' "$id"
             _repl_yaml_field "  " "title" "$title"
             _repl_yaml_field "  " "body" "$body"
+            _repl_yaml_field "  " "priority" "$priority"
+            _repl_yaml_field "  " "status" "$status"
+            _repl_yaml_field "  " "notes" "$notes"
             ;;
         createTest)
             id="$(_repl_yaml_get "$params_yaml" "id")"
+            title="$(_repl_yaml_get "$params_yaml" "title")"
             body="$(_repl_first_param_text "$params_yaml" "description" "condition")"
+            priority="$(_repl_yaml_get "$params_yaml" "priority")"
+            area="$(_repl_yaml_get "$params_yaml" "area")"
+            test_type="$(_repl_yaml_get "$params_yaml" "testType")"
+            notes="$(_repl_yaml_get "$params_yaml" "notes")"
             printf 'request:\n'
             _repl_yaml_field "  " "id" "$id"
+            _repl_yaml_field "  " "title" "$title"
             _repl_yaml_field "  " "condition" "$body"
+            _repl_yaml_field "  " "priority" "$priority"
+            _repl_yaml_field "  " "area" "$area"
+            _repl_yaml_field "  " "testType" "$test_type"
+            _repl_yaml_field "  " "notes" "$notes"
             ;;
         updateTest)
             id="$(_repl_yaml_get "$params_yaml" "id")"
+            title="$(_repl_yaml_get "$params_yaml" "title")"
             body="$(_repl_first_param_text "$params_yaml" "description" "condition")"
+            priority="$(_repl_yaml_get "$params_yaml" "priority")"
+            status="$(_repl_yaml_get "$params_yaml" "status")"
+            notes="$(_repl_yaml_get "$params_yaml" "notes")"
+            existing="$(_repl_requirements_existing_for_update "$operation" "$id" 2>/dev/null || true)"
+            [ -z "$title" ] && title="$(_repl_yaml_get "$existing" "title")"
+            [ -z "$body" ] && body="$(_repl_first_param_text "$existing" "description" "condition" "body")"
+            [ -z "$priority" ] && priority="$(_repl_yaml_get "$existing" "priority")"
+            [ -z "$status" ] && status="$(_repl_yaml_get "$existing" "status")"
+            [ -z "$notes" ] && notes="$(_repl_yaml_get "$existing" "notes")"
             printf 'id: %s\nrequest:\n' "$id"
+            _repl_yaml_field "  " "title" "$title"
             _repl_yaml_field "  " "condition" "$body"
+            _repl_yaml_field "  " "priority" "$priority"
+            _repl_yaml_field "  " "status" "$status"
+            _repl_yaml_field "  " "notes" "$notes"
             ;;
         createMapping)
             fr_id="$(_repl_yaml_get "$params_yaml" "frId")"
@@ -2190,8 +2393,9 @@ _repl_workflow_requirements() {
     local method="$1"
     local params_yaml="${2:-}"
     local operation="${method#workflow.requirements.}"
-    local workflow_params typed_method typed_params response status
+    local workflow_params typed_method typed_params response status created_response
     local failsafe_file=""
+    local typed_tried=0
 
     _repl_requirements_typed_method "$operation" >/dev/null || {
         _repl_invoke_raw_in_workspace "$method" "$params_yaml"
@@ -2201,6 +2405,44 @@ _repl_workflow_requirements() {
     _repl_requirements_bootstrap_state "$params_yaml" || return 1
     if _repl_workflow_requirements_is_mutation "$operation"; then
         failsafe_file="$(_repl_failsafe_write "$method" "$params_yaml" "requirements_${operation}")"
+    fi
+
+    typed_method="$(_repl_requirements_typed_method "$operation")"
+    typed_params="$(_repl_requirements_typed_params "$operation" "$params_yaml")"
+
+    if _repl_workflow_requirements_prefers_typed "$operation"; then
+        typed_tried=1
+        response="$(_repl_invoke_raw_in_workspace "$typed_method" "$typed_params" "compat" 2>&1)"
+        status=$?
+        if [ $status -eq 0 ] && _repl_response_is_nonempty_success "$response"; then
+            _repl_failsafe_clear "$failsafe_file"
+            printf '%s\n' "$response"
+            return 0
+        fi
+        if [ $status -eq 0 ]; then
+            created_response="$(_repl_requirements_created_response_after_empty_success "$operation" "$params_yaml" "$response" 2>&1)"
+            if [ $? -eq 0 ]; then
+                _repl_failsafe_clear "$failsafe_file"
+                printf '%s\n' "$created_response"
+                return 0
+            fi
+        fi
+
+        response="$(_repl_invoke_raw_in_workspace "$typed_method" "$typed_params" 2>&1)"
+        status=$?
+        if [ $status -eq 0 ] && _repl_response_is_nonempty_success "$response"; then
+            _repl_failsafe_clear "$failsafe_file"
+            printf '%s\n' "$response"
+            return 0
+        fi
+        if [ $status -eq 0 ]; then
+            created_response="$(_repl_requirements_created_response_after_empty_success "$operation" "$params_yaml" "$response" 2>&1)"
+            if [ $? -eq 0 ]; then
+                _repl_failsafe_clear "$failsafe_file"
+                printf '%s\n' "$created_response"
+                return 0
+            fi
+        fi
     fi
 
     workflow_params="$(_repl_requirements_workflow_params "$operation" "$params_yaml")"
@@ -2234,35 +2476,51 @@ _repl_workflow_requirements() {
         fi
     fi
 
-    typed_method="$(_repl_requirements_typed_method "$operation")"
-    typed_params="$(_repl_requirements_typed_params "$operation" "$params_yaml")"
-    response="$(_repl_invoke_raw_in_workspace "$typed_method" "$typed_params" "compat" 2>&1)"
-    status=$?
-    if [ $status -eq 0 ] && _repl_response_is_nonempty_success "$response"; then
-        if [ "$operation" = "generateDocument" ]; then
-            if _repl_requirements_emit_generate_response "$response" "$params_yaml"; then
+    if [ "$typed_tried" -eq 0 ]; then
+        response="$(_repl_invoke_raw_in_workspace "$typed_method" "$typed_params" "compat" 2>&1)"
+        status=$?
+        if [ $status -eq 0 ] && _repl_response_is_nonempty_success "$response"; then
+            if [ "$operation" = "generateDocument" ]; then
+                if _repl_requirements_emit_generate_response "$response" "$params_yaml"; then
+                    _repl_failsafe_clear "$failsafe_file"
+                    return 0
+                fi
+            else
                 _repl_failsafe_clear "$failsafe_file"
+                printf '%s\n' "$response"
                 return 0
             fi
-        else
-            _repl_failsafe_clear "$failsafe_file"
-            printf '%s\n' "$response"
-            return 0
         fi
-    fi
-
-    response="$(_repl_invoke_raw_in_workspace "$typed_method" "$typed_params" 2>&1)"
-    status=$?
-    if [ $status -eq 0 ] && _repl_response_is_nonempty_success "$response"; then
-        if [ "$operation" = "generateDocument" ]; then
-            if _repl_requirements_emit_generate_response "$response" "$params_yaml"; then
+        if [ $status -eq 0 ]; then
+            created_response="$(_repl_requirements_created_response_after_empty_success "$operation" "$params_yaml" "$response" 2>&1)"
+            if [ $? -eq 0 ]; then
                 _repl_failsafe_clear "$failsafe_file"
+                printf '%s\n' "$created_response"
                 return 0
             fi
-        else
-            _repl_failsafe_clear "$failsafe_file"
-            printf '%s\n' "$response"
-            return 0
+        fi
+
+        response="$(_repl_invoke_raw_in_workspace "$typed_method" "$typed_params" 2>&1)"
+        status=$?
+        if [ $status -eq 0 ] && _repl_response_is_nonempty_success "$response"; then
+            if [ "$operation" = "generateDocument" ]; then
+                if _repl_requirements_emit_generate_response "$response" "$params_yaml"; then
+                    _repl_failsafe_clear "$failsafe_file"
+                    return 0
+                fi
+            else
+                _repl_failsafe_clear "$failsafe_file"
+                printf '%s\n' "$response"
+                return 0
+            fi
+        fi
+        if [ $status -eq 0 ]; then
+            created_response="$(_repl_requirements_created_response_after_empty_success "$operation" "$params_yaml" "$response" 2>&1)"
+            if [ $? -eq 0 ]; then
+                _repl_failsafe_clear "$failsafe_file"
+                printf '%s\n' "$created_response"
+                return 0
+            fi
         fi
     fi
     if [ "$operation" = "listFr" ] || [ "$operation" = "listTr" ] || [ "$operation" = "listTest" ] || [ "$operation" = "listMappings" ]; then
@@ -3149,4 +3407,4 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     exit $?
 fi
 
-export -f repl_invoke repl_build_envelope _repl_bool_to_enabled _repl_compat_marker_endpoint_field _repl_compat_marker_field _repl_create_compat_marker _repl_failsafe_clear _repl_failsafe_dir _repl_failsafe_plugin_name _repl_failsafe_workspace_root _repl_failsafe_write _repl_first_param_text _repl_internal_todo_is_enabled _repl_internal_todo_mode_value _repl_internal_todo_state_file _repl_invoke_raw _repl_invoke_raw_in_workspace _repl_invoke_with_fallback _repl_bootstrap_state _repl_emit_response _repl_generate_session_id _repl_json_escape _repl_normalized_actions_block _repl_normalized_dialog_items_block _repl_param_text _repl_path_for_bash _repl_path_for_repl _repl_pending_import_file _repl_pending_import_todo_exists _repl_persist_turn _repl_requirements_bootstrap_state _repl_requirements_generate_http_fallback _repl_requirements_normalize_generate_response _repl_requirements_typed_doc_type _repl_requirements_typed_method _repl_requirements_typed_params _repl_requirements_workflow_doc_type _repl_requirements_workflow_params _repl_requirement_list_field _repl_response_has_empty_result _repl_response_is_error _repl_response_is_nonempty_success _repl_run_repl_with_timeout _repl_session_meta _repl_session_state_value _repl_sessionlog_import_recovery_http_fallback _repl_sessionlog_submit_http_fallback _repl_state_value _repl_submit_session _repl_todo_http_fallback _repl_todo_json_body _repl_turns_block _repl_url_path_segment _repl_workflow_append_actions _repl_workflow_append_dialog _repl_workflow_begin_turn _repl_workflow_bootstrap _repl_workflow_complete_turn _repl_workflow_import_pending _repl_workflow_import_recovery _repl_workflow_open_session _repl_workflow_query_history _repl_workflow_requirements _repl_workflow_requirements_is_mutation _repl_workflow_todo _repl_workflow_todo_internal_tracking _repl_workflow_todo_is_mutation _repl_workflow_todo_select _repl_workflow_todo_update_selected _repl_workflow_update_turn _repl_yaml_block_get _repl_yaml_field _repl_yaml_get 2>/dev/null || true
+export -f repl_invoke repl_build_envelope _repl_bool_to_enabled _repl_compat_marker_endpoint_field _repl_compat_marker_field _repl_create_compat_marker _repl_failsafe_clear _repl_failsafe_dir _repl_failsafe_plugin_name _repl_failsafe_workspace_root _repl_failsafe_write _repl_first_param_text _repl_internal_todo_is_enabled _repl_internal_todo_mode_value _repl_internal_todo_state_file _repl_invoke_raw _repl_invoke_raw_in_workspace _repl_invoke_with_fallback _repl_bootstrap_state _repl_emit_response _repl_generate_session_id _repl_json_escape _repl_normalized_actions_block _repl_normalized_dialog_items_block _repl_param_text _repl_path_for_bash _repl_path_for_repl _repl_pending_import_file _repl_pending_import_todo_exists _repl_persist_turn _repl_requirements_bootstrap_state _repl_requirements_existing_for_update _repl_requirements_generate_http_fallback _repl_requirements_normalize_generate_response _repl_requirements_typed_doc_type _repl_requirements_typed_method _repl_requirements_typed_params _repl_requirements_update_get_method _repl_requirements_update_workflow_get_method _repl_requirements_workflow_doc_type _repl_requirements_workflow_params _repl_requirement_list_field _repl_response_has_empty_result _repl_response_is_error _repl_response_is_nonempty_success _repl_run_repl_with_timeout _repl_session_meta _repl_session_state_value _repl_sessionlog_import_recovery_http_fallback _repl_sessionlog_submit_http_fallback _repl_state_value _repl_submit_session _repl_todo_http_fallback _repl_todo_json_body _repl_turns_block _repl_url_path_segment _repl_workflow_append_actions _repl_workflow_append_dialog _repl_workflow_begin_turn _repl_workflow_bootstrap _repl_workflow_complete_turn _repl_workflow_import_pending _repl_workflow_import_recovery _repl_workflow_open_session _repl_workflow_query_history _repl_workflow_requirements _repl_workflow_requirements_is_mutation _repl_workflow_requirements_prefers_typed _repl_workflow_todo _repl_workflow_todo_internal_tracking _repl_workflow_todo_is_mutation _repl_workflow_todo_select _repl_workflow_todo_update_selected _repl_workflow_update_turn _repl_yaml_block_get _repl_yaml_field _repl_yaml_get 2>/dev/null || true
