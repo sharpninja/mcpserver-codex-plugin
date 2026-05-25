@@ -2887,6 +2887,31 @@ _repl_workflow_complete_turn() {
         { print }
     ' "$turn_file" > "$tmp" && mv "$tmp" "$turn_file"
 
+    # When rich params (interpretation field) are present, route to importRecovery
+    # so all JSONL-extracted fields reach the server instead of the minimal turn block.
+    if printf '%s\n' "$params" | grep -q '^interpretation:' 2>/dev/null && command -v node >/dev/null 2>&1; then
+        local opened_at source_type session_id model started import_yaml
+        opened_at="$(_repl_current_turn_value "openedAt")"
+        [ -z "$opened_at" ] && opened_at="$(_repl_now_iso)"
+        source_type="$(_repl_session_state_value "sourceType")"
+        [ -z "$source_type" ] && source_type="Codex"
+        session_id="$(_repl_session_state_value "sessionId")"
+        model="$(_repl_session_state_value "model")"
+        [ -z "$model" ] && model="codex"
+        started="$(_repl_session_state_value "started")"
+        [ -z "$started" ] && started="$(_repl_now_iso)"
+
+        import_yaml="$(printf '%s\n' "$params" | node "${REPL_INVOKE_SCRIPT_DIR}/complete-turn-to-recovery.js" \
+            "$session_id" "$source_type" "$model" "$started" "$req_id" "$title" "$opened_at" 2>/dev/null || true)"
+
+        if [ -n "$import_yaml" ]; then
+            _repl_workflow_import_recovery "$import_yaml" >/dev/null 2>&1 || true
+            _repl_emit_response "  ok: true
+  status: completed"
+            return 0
+        fi
+    fi
+
     _repl_persist_turn "$req_id" "$title" "completed" "$response_text" "" || true
     _repl_emit_response "  ok: true
   status: completed"
