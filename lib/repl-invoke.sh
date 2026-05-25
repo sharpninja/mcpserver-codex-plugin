@@ -1430,13 +1430,20 @@ _repl_requirements_generate_http_fallback() {
 _repl_sessionlog_query_http_fallback() {
     local params_yaml="${1:-}"
     local workspace_path workspace_path_bash base_url marker_file api_key
+    local requested_workspace_path
     local agent model text from to limit offset
 
     if ! command -v curl >/dev/null 2>&1; then
         return 1
     fi
 
-    workspace_path="$(_repl_unquote "$(_repl_session_state_value "workspacePath")")"
+    requested_workspace_path="$(_repl_yaml_get "$params_yaml" "workspacePath" 2>/dev/null || true)"
+    requested_workspace_path="$(_repl_unquote "$requested_workspace_path")"
+    if [ -n "$requested_workspace_path" ]; then
+        workspace_path="$requested_workspace_path"
+    else
+        workspace_path="$(_repl_unquote "$(_repl_session_state_value "workspacePath")")"
+    fi
     base_url="${MCPSERVER_BASE_URL:-$(_repl_unquote "$(_repl_session_state_value "baseUrl")")}"
 
     workspace_path_bash="$(_repl_path_for_bash "$workspace_path" 2>/dev/null || true)"
@@ -1450,9 +1457,16 @@ _repl_sessionlog_query_http_fallback() {
         marker_file="$(find_marker_file "$workspace_path_bash" 2>/dev/null || true)"
     fi
 
-    api_key="${MCPSERVER_API_KEY:-$(_repl_compat_marker_field "$marker_file" "apiKey" "")}"
-    [ -z "$workspace_path" ] && workspace_path="${MCPSERVER_WORKSPACE_PATH:-$(_repl_compat_marker_field "$marker_file" "workspacePath" "")}"
-    [ -z "$base_url" ] && base_url="$(_repl_compat_marker_field "$marker_file" "baseUrl" "")"
+    if [ -n "$requested_workspace_path" ]; then
+        api_key="$(_repl_compat_marker_field "$marker_file" "apiKey" "")"
+        base_url="$(_repl_compat_marker_field "$marker_file" "baseUrl" "")"
+        [ -z "$api_key" ] && api_key="${MCPSERVER_API_KEY:-}"
+        [ -z "$base_url" ] && base_url="${MCPSERVER_BASE_URL:-$(_repl_unquote "$(_repl_session_state_value "baseUrl")")}"
+    else
+        api_key="${MCPSERVER_API_KEY:-$(_repl_compat_marker_field "$marker_file" "apiKey" "")}"
+        [ -z "$workspace_path" ] && workspace_path="${MCPSERVER_WORKSPACE_PATH:-$(_repl_compat_marker_field "$marker_file" "workspacePath" "")}"
+        [ -z "$base_url" ] && base_url="$(_repl_compat_marker_field "$marker_file" "baseUrl" "")"
+    fi
     [ -z "$api_key" ] && return 1
     [ -z "$workspace_path" ] && return 1
     [ -z "$base_url" ] && return 1
@@ -2622,7 +2636,18 @@ _repl_workflow_complete_turn() {
 
 _repl_workflow_query_history() {
     local params_yaml="${1:-}"
-    local response status
+    local explicit_workspace_path response status
+
+    explicit_workspace_path="$(_repl_yaml_get "$params_yaml" "workspacePath" 2>/dev/null || true)"
+    explicit_workspace_path="$(_repl_unquote "$explicit_workspace_path")"
+    if [ -n "$explicit_workspace_path" ]; then
+        response="$(_repl_sessionlog_query_http_fallback "$params_yaml" 2>&1)"
+        status=$?
+        if [ $status -eq 0 ] && _repl_response_is_nonempty_success "$response"; then
+            printf '%s\n' "$response"
+            return 0
+        fi
+    fi
 
     response="$(_repl_invoke_raw_in_workspace "client.SessionLog.QueryAsync" "$params_yaml" "compat" 2>&1)"
     status=$?

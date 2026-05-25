@@ -477,6 +477,26 @@ limit: 1"
     ! grep -q "MCP_WORKSPACE_PATH=$SANDBOX/workspace" "$STUB_LOG"
 }
 
+@test "workflow.sessionlog.queryHistory honors explicit workspacePath in HTTP query" {
+    write_requirements_state
+    export MCPSERVER_API_KEY="test-api-key"
+    other_workspace="$SANDBOX/other-workspace"
+    mkdir -p "$other_workspace"
+    source "$LIB"
+
+    run repl_invoke "workflow.sessionlog.queryHistory" "workspacePath: \"$other_workspace\"
+limit: 1"
+
+    unset MCPSERVER_API_KEY
+    [ "$status" -eq 0 ]
+    grep -q "curl_method=GET" "$STUB_LOG"
+    grep -q "curl_url=http://127.0.0.1:8765/mcpserver/sessionlog" "$STUB_LOG"
+    grep -q "curl_header=X-Api-Key: test-api-key" "$STUB_LOG"
+    grep -q "curl_header=X-Workspace-Path: $other_workspace" "$STUB_LOG"
+    grep -q "curl_query=limit=1" "$STUB_LOG"
+    ! grep -q "method=client.SessionLog.QueryAsync" "$STUB_LOG"
+}
+
 @test "workflow.todo.query uses authenticated HTTP fallback before REPL" {
     write_requirements_state
     export MCPSERVER_API_KEY="test-api-key"
