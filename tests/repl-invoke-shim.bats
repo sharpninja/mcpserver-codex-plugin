@@ -686,12 +686,48 @@ priority: medium"
     source "$LIB"
     run repl_invoke "workflow.requirements.updateFr" "id: FR-MCP-901
 title: Requirements shim
-description: Plugin wrapper must route update calls through typed fallback"
+description: Plugin wrapper must route update calls through typed fallback
+priority: high
+status: in_progress
+notes: Preserve requirement metadata"
     unset STUB_WORKFLOW_REQUIREMENTS_AUTH_ERROR
     [ "$status" -eq 0 ]
     ! echo "$output" | grep -q "Authentication required"
     grep -q "method=workflow.requirements.updateFr" "$STUB_LOG"
     grep -q "method=client.Requirements.UpdateFrAsync" "$STUB_LOG"
+    grep -Eq "input:[[:space:]]+priority: high" "$STUB_LOG"
+    grep -Eq "input:[[:space:]]+status: in_progress" "$STUB_LOG"
+    grep -Eq "input:[[:space:]]+notes: Preserve requirement metadata" "$STUB_LOG"
+}
+
+@test "workflow.requirements update typed fallbacks preserve TR and TEST metadata" {
+    write_requirements_state
+    export STUB_WORKFLOW_REQUIREMENTS_AUTH_ERROR=1
+    source "$LIB"
+
+    run repl_invoke "workflow.requirements.updateTr" "id: TR-MCP-PLUGIN-901
+title: Requirements shim TR
+description: Plugin wrapper must route TR metadata
+priority: high
+status: completed
+notes: TR metadata"
+    [ "$status" -eq 0 ]
+
+    run repl_invoke "workflow.requirements.updateTest" "id: TEST-MCP-901
+title: Requirements shim TEST
+description: Plugin wrapper must route TEST metadata
+priority: high
+status: completed
+notes: TEST metadata"
+    unset STUB_WORKFLOW_REQUIREMENTS_AUTH_ERROR
+    [ "$status" -eq 0 ]
+
+    grep -q "method=client.Requirements.UpdateTrAsync" "$STUB_LOG"
+    grep -q "method=client.Requirements.UpdateTestAsync" "$STUB_LOG"
+    grep -Eq "input:[[:space:]]+priority: high" "$STUB_LOG"
+    grep -Eq "input:[[:space:]]+status: completed" "$STUB_LOG"
+    grep -Eq "input:[[:space:]]+notes: TR metadata" "$STUB_LOG"
+    grep -Eq "input:[[:space:]]+notes: TEST metadata" "$STUB_LOG"
 }
 
 @test "workflow.requirements.createFr listFr getFr works through typed fallback" {

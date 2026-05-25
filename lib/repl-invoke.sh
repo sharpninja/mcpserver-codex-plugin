@@ -1122,7 +1122,7 @@ _repl_requirements_typed_method() {
 _repl_requirements_typed_params() {
     local operation="$1"
     local params_yaml="${2:-}"
-    local id title body fr_id doc_type format content documents_block source_format preferred_wiki_format
+    local id title body priority status notes area subarea test_type fr_id doc_type format content documents_block source_format preferred_wiki_format
 
     case "$operation" in
         listFr|listTr|listTest|listMappings)
@@ -1136,48 +1136,92 @@ _repl_requirements_typed_params() {
             id="$(_repl_yaml_get "$params_yaml" "id")"
             title="$(_repl_yaml_get "$params_yaml" "title")"
             body="$(_repl_first_param_text "$params_yaml" "description" "body")"
+            priority="$(_repl_yaml_get "$params_yaml" "priority")"
+            area="$(_repl_yaml_get "$params_yaml" "area")"
+            notes="$(_repl_yaml_get "$params_yaml" "notes")"
             printf 'request:\n'
             _repl_yaml_field "  " "id" "$id"
             _repl_yaml_field "  " "title" "$title"
             _repl_yaml_field "  " "body" "$body"
+            _repl_yaml_field "  " "priority" "$priority"
+            _repl_yaml_field "  " "area" "$area"
+            _repl_yaml_field "  " "notes" "$notes"
             ;;
         updateFr)
             id="$(_repl_yaml_get "$params_yaml" "id")"
             title="$(_repl_yaml_get "$params_yaml" "title")"
             body="$(_repl_first_param_text "$params_yaml" "description" "body")"
+            priority="$(_repl_yaml_get "$params_yaml" "priority")"
+            status="$(_repl_yaml_get "$params_yaml" "status")"
+            notes="$(_repl_yaml_get "$params_yaml" "notes")"
             printf 'id: %s\nrequest:\n' "$id"
             _repl_yaml_field "  " "title" "$title"
             _repl_yaml_field "  " "body" "$body"
+            _repl_yaml_field "  " "priority" "$priority"
+            _repl_yaml_field "  " "status" "$status"
+            _repl_yaml_field "  " "notes" "$notes"
             ;;
         createTr)
             id="$(_repl_yaml_get "$params_yaml" "id")"
             title="$(_repl_yaml_get "$params_yaml" "title")"
             body="$(_repl_first_param_text "$params_yaml" "description" "body")"
+            priority="$(_repl_yaml_get "$params_yaml" "priority")"
+            area="$(_repl_yaml_get "$params_yaml" "area")"
+            subarea="$(_repl_yaml_get "$params_yaml" "subarea")"
+            notes="$(_repl_yaml_get "$params_yaml" "notes")"
             printf 'request:\n'
             _repl_yaml_field "  " "id" "$id"
             _repl_yaml_field "  " "title" "$title"
             _repl_yaml_field "  " "body" "$body"
+            _repl_yaml_field "  " "priority" "$priority"
+            _repl_yaml_field "  " "area" "$area"
+            _repl_yaml_field "  " "subarea" "$subarea"
+            _repl_yaml_field "  " "notes" "$notes"
             ;;
         updateTr)
             id="$(_repl_yaml_get "$params_yaml" "id")"
             title="$(_repl_yaml_get "$params_yaml" "title")"
             body="$(_repl_first_param_text "$params_yaml" "description" "body")"
+            priority="$(_repl_yaml_get "$params_yaml" "priority")"
+            status="$(_repl_yaml_get "$params_yaml" "status")"
+            notes="$(_repl_yaml_get "$params_yaml" "notes")"
             printf 'id: %s\nrequest:\n' "$id"
             _repl_yaml_field "  " "title" "$title"
             _repl_yaml_field "  " "body" "$body"
+            _repl_yaml_field "  " "priority" "$priority"
+            _repl_yaml_field "  " "status" "$status"
+            _repl_yaml_field "  " "notes" "$notes"
             ;;
         createTest)
             id="$(_repl_yaml_get "$params_yaml" "id")"
+            title="$(_repl_yaml_get "$params_yaml" "title")"
             body="$(_repl_first_param_text "$params_yaml" "description" "condition")"
+            priority="$(_repl_yaml_get "$params_yaml" "priority")"
+            area="$(_repl_yaml_get "$params_yaml" "area")"
+            test_type="$(_repl_yaml_get "$params_yaml" "testType")"
+            notes="$(_repl_yaml_get "$params_yaml" "notes")"
             printf 'request:\n'
             _repl_yaml_field "  " "id" "$id"
+            _repl_yaml_field "  " "title" "$title"
             _repl_yaml_field "  " "condition" "$body"
+            _repl_yaml_field "  " "priority" "$priority"
+            _repl_yaml_field "  " "area" "$area"
+            _repl_yaml_field "  " "testType" "$test_type"
+            _repl_yaml_field "  " "notes" "$notes"
             ;;
         updateTest)
             id="$(_repl_yaml_get "$params_yaml" "id")"
+            title="$(_repl_yaml_get "$params_yaml" "title")"
             body="$(_repl_first_param_text "$params_yaml" "description" "condition")"
+            priority="$(_repl_yaml_get "$params_yaml" "priority")"
+            status="$(_repl_yaml_get "$params_yaml" "status")"
+            notes="$(_repl_yaml_get "$params_yaml" "notes")"
             printf 'id: %s\nrequest:\n' "$id"
+            _repl_yaml_field "  " "title" "$title"
             _repl_yaml_field "  " "condition" "$body"
+            _repl_yaml_field "  " "priority" "$priority"
+            _repl_yaml_field "  " "status" "$status"
+            _repl_yaml_field "  " "notes" "$notes"
             ;;
         createMapping)
             fr_id="$(_repl_yaml_get "$params_yaml" "frId")"
