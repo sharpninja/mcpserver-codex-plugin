@@ -354,7 +354,7 @@ Pass criteria:
 
 - No supported `workflow.*` command falls through as `method_not_found`.
 - Session and requirements queries use authenticated marker context.
-- YAML-over-STDIO envelopes include a unique request ID.
+- Single-line JSON-over-STDIO envelopes include a unique request ID.
 - Parameter names match live client method names.
 - Empty result bodies are investigated, not treated as proof of data persistence.
 

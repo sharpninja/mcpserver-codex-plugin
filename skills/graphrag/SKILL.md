@@ -16,13 +16,15 @@ payload:
 ```
 
 This is idempotent and should be called once per conversation context.
+If you write to `mcpserver-repl --agent-stdio` directly for GraphRAG diagnostics,
+send one single-line JSON request envelope per stdin message.
 
 
 # GraphRAG Knowledge Graph
 
 ## Overview
 
-To interact with the workspace GraphRAG knowledge graph, use the `workflow.graphrag.*` REPL command namespace via `mcpserver-repl --agent-stdio`. GraphRAG combines graph-based retrieval with semantic search, enabling richer context retrieval than vector-only approaches.
+To interact with the workspace GraphRAG knowledge graph, use the `workflow.graphrag.*` REPL command namespace. Direct `mcpserver-repl --agent-stdio` calls must be single-line JSON request envelopes, not formatted YAML. GraphRAG combines graph-based retrieval with semantic search, enabling richer context retrieval than vector-only approaches.
 
 GraphRAG is disabled by default. Confirm it is active for the workspace before calling any operations — `workflow.graphrag.status` will report `enabled: false` if it has not been configured.
 

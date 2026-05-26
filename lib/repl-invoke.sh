@@ -2,7 +2,8 @@
 set -uo pipefail
 
 # repl_invoke <method> [params_yaml]
-# Sends a YAML request envelope to mcpserver-repl --agent-stdio.
+# Wrapper accepts YAML/JSON params. Direct mcpserver-repl --agent-stdio callers
+# should send single-line JSON request envelopes.
 # Workflow-prefixed methods are plugin-local shims that translate to either:
 # - local cache mutations under cache/
 # - the real client.* MCP methods exposed by mcpserver-repl
@@ -116,6 +117,191 @@ _repl_list_block_get() {
             print
         }
     '
+}
+
+_repl_schema_error() {
+    local method="$1"
+    local message="$2"
+    printf 'type: error\npayload:\n'
+    printf '  code: schema_validation_failed\n'
+    printf '  message: %s\n' "$message"
+    printf '  details:\n'
+    printf '    methodName: %s\n' "$method"
+}
+
+_repl_schema_has_text() {
+    local params_yaml="$1"
+    local key="$2"
+    local value
+    value="$(_repl_param_text "$params_yaml" "$key" 2>/dev/null || true)"
+    value="$(_repl_unquote "$value")"
+    if [ -n "$value" ]; then
+        return 0
+    fi
+
+    printf '%s\n' "$params_yaml" | grep -Eq "^[[:space:]]*$key:[[:space:]]*(#.*)?$"
+}
+
+_repl_schema_require_text() {
+    local method="$1"
+    local params_yaml="$2"
+    local key="$3"
+    if ! _repl_schema_has_text "$params_yaml" "$key"; then
+        _repl_schema_error "$method" "payload.params.${key} is required."
+        return 1
+    fi
+}
+
+_repl_schema_require_any_text() {
+    local method="$1"
+    local params_yaml="$2"
+    shift 2
+    local key
+    for key in "$@"; do
+        if _repl_schema_has_text "$params_yaml" "$key"; then
+            return 0
+        fi
+    done
+    _repl_schema_error "$method" "payload.params must include at least one of: $*."
+    return 1
+}
+
+_repl_schema_has_records() {
+    local params_yaml="$1"
+    local records_block records_value
+    records_block="$(_repl_list_block_get "$params_yaml" "records" 2>/dev/null || true)"
+    if [ -n "$records_block" ] && printf '%s\n' "$records_block" | grep -q '^[[:space:]]*-' ; then
+        return 0
+    fi
+    records_value="$(_repl_yaml_get "$params_yaml" "records" 2>/dev/null || true)"
+    records_value="$(_repl_unquote "$records_value")"
+    printf '%s' "$records_value" | grep -Eq '^\[[[:space:]]*\{' && return 0
+    return 1
+}
+
+_repl_schema_require_records() {
+    local method="$1"
+    local params_yaml="$2"
+    if ! _repl_schema_has_records "$params_yaml"; then
+        _repl_schema_error "$method" "payload.params.records must be a non-empty array."
+        return 1
+    fi
+}
+
+_repl_schema_validate_method() {
+    local method="$1"
+    local params_yaml="${2:-}"
+    case "$method" in
+        workflow.sessionlog.openSession)
+            _repl_schema_require_text "$method" "$params_yaml" "sessionId" || return 1
+            _repl_schema_require_text "$method" "$params_yaml" "title" || return 1
+            ;;
+        workflow.sessionlog.beginTurn)
+            _repl_schema_require_text "$method" "$params_yaml" "requestId" || return 1
+            _repl_schema_require_text "$method" "$params_yaml" "queryTitle" || return 1
+            _repl_schema_require_text "$method" "$params_yaml" "queryText" || return 1
+            ;;
+        workflow.sessionlog.failTurn)
+            _repl_schema_require_text "$method" "$params_yaml" "errorMessage" || return 1
+            ;;
+        workflow.sessionlog.appendDialog)
+            _repl_schema_require_text "$method" "$params_yaml" "dialogItems" || return 1
+            ;;
+        workflow.sessionlog.appendActions)
+            _repl_schema_require_text "$method" "$params_yaml" "actions" || return 1
+            ;;
+        workflow.sessionlog.importRecovery|client.SessionLog.SubmitAsync)
+            _repl_schema_require_text "$method" "$params_yaml" "sessionLog" || return 1
+            ;;
+        workflow.todo.get|workflow.todo.select|workflow.todo.delete|workflow.todo.analyzeRequirements|workflow.todo.streamStatus|workflow.todo.streamPlan|workflow.todo.streamImplement|workflow.todo.getProjectionStatus|workflow.todo.repairProjection)
+            _repl_schema_require_text "$method" "$params_yaml" "id" || return 1
+            ;;
+        workflow.todo.create|client.Todo.CreateAsync)
+            _repl_schema_require_text "$method" "$params_yaml" "id" || return 1
+            _repl_schema_require_text "$method" "$params_yaml" "title" || return 1
+            _repl_schema_require_text "$method" "$params_yaml" "section" || return 1
+            _repl_schema_require_text "$method" "$params_yaml" "priority" || return 1
+            ;;
+        workflow.todo.update|client.Todo.UpdateAsync)
+            _repl_schema_require_text "$method" "$params_yaml" "id" || return 1
+            ;;
+        workflow.requirements.getFr|workflow.requirements.deleteFr|workflow.requirements.getTr|workflow.requirements.deleteTr|workflow.requirements.getTest|workflow.requirements.deleteTest|client.Requirements.GetFrAsync|client.Requirements.DeleteFrAsync|client.Requirements.GetTrAsync|client.Requirements.DeleteTrAsync|client.Requirements.GetTestAsync|client.Requirements.DeleteTestAsync)
+            _repl_schema_require_text "$method" "$params_yaml" "id" || return 1
+            ;;
+        workflow.requirements.createFr|client.Requirements.CreateFrAsync)
+            _repl_schema_require_text "$method" "$params_yaml" "id" || return 1
+            _repl_schema_require_text "$method" "$params_yaml" "title" || return 1
+            _repl_schema_require_any_text "$method" "$params_yaml" "description" "body" || return 1
+            _repl_schema_require_text "$method" "$params_yaml" "priority" || return 1
+            _repl_schema_require_text "$method" "$params_yaml" "area" || return 1
+            ;;
+        workflow.requirements.createTr|client.Requirements.CreateTrAsync)
+            _repl_schema_require_text "$method" "$params_yaml" "id" || return 1
+            _repl_schema_require_text "$method" "$params_yaml" "title" || return 1
+            _repl_schema_require_any_text "$method" "$params_yaml" "description" "body" || return 1
+            _repl_schema_require_text "$method" "$params_yaml" "priority" || return 1
+            _repl_schema_require_text "$method" "$params_yaml" "area" || return 1
+            _repl_schema_require_text "$method" "$params_yaml" "subarea" || return 1
+            ;;
+        workflow.requirements.createTest|client.Requirements.CreateTestAsync)
+            _repl_schema_require_text "$method" "$params_yaml" "id" || return 1
+            _repl_schema_require_text "$method" "$params_yaml" "title" || return 1
+            _repl_schema_require_any_text "$method" "$params_yaml" "description" "condition" || return 1
+            _repl_schema_require_text "$method" "$params_yaml" "priority" || return 1
+            _repl_schema_require_text "$method" "$params_yaml" "area" || return 1
+            ;;
+        workflow.requirements.updateFr|workflow.requirements.updateTr|workflow.requirements.updateTest|client.Requirements.UpdateFrAsync|client.Requirements.UpdateTrAsync|client.Requirements.UpdateTestAsync)
+            _repl_schema_require_text "$method" "$params_yaml" "id" || return 1
+            ;;
+        workflow.requirements.createFrBatch|workflow.requirements.updateFrBatch|workflow.requirements.createTrBatch|workflow.requirements.updateTrBatch|workflow.requirements.createTestBatch|workflow.requirements.updateTestBatch|workflow.requirements.createBatch|workflow.requirements.updateBatch|client.Requirements.CreateFrBatchAsync|client.Requirements.UpdateFrBatchAsync|client.Requirements.CreateTrBatchAsync|client.Requirements.UpdateTrBatchAsync|client.Requirements.CreateTestBatchAsync|client.Requirements.UpdateTestBatchAsync|client.Requirements.CreateBatchAsync|client.Requirements.UpdateBatchAsync)
+            _repl_schema_require_records "$method" "$params_yaml" || return 1
+            ;;
+        workflow.requirements.createMapping|client.Requirements.UpsertMappingAsync)
+            _repl_schema_require_text "$method" "$params_yaml" "frId" || return 1
+            _repl_schema_require_any_text "$method" "$params_yaml" "trId" "trIds" "testId" "testIds" || return 1
+            ;;
+        workflow.requirements.deleteMapping|client.Requirements.DeleteMappingAsync)
+            _repl_schema_require_any_text "$method" "$params_yaml" "frId" "trId" "testId" || return 1
+            ;;
+        workflow.requirements.ingestDocument|client.Requirements.IngestAsync)
+            _repl_schema_require_any_text "$method" "$params_yaml" "content" "documents" "functionalMarkdown" "technicalMarkdown" "testingMarkdown" "mappingMarkdown" || return 1
+            ;;
+        workflow.graphrag.query)
+            _repl_schema_require_text "$method" "$params_yaml" "query" || return 1
+            ;;
+        workflow.graphrag.ingest)
+            _repl_schema_require_text "$method" "$params_yaml" "content" || return 1
+            ;;
+        workflow.graphrag.documents.chunks|workflow.graphrag.documents.delete)
+            _repl_schema_require_text "$method" "$params_yaml" "documentId" || return 1
+            ;;
+        workflow.graphrag.entities.get|workflow.graphrag.entities.delete)
+            _repl_schema_require_text "$method" "$params_yaml" "entityId" || return 1
+            ;;
+        workflow.graphrag.entities.create)
+            _repl_schema_require_text "$method" "$params_yaml" "name" || return 1
+            _repl_schema_require_text "$method" "$params_yaml" "entityType" || return 1
+            ;;
+        workflow.graphrag.entities.update)
+            _repl_schema_require_text "$method" "$params_yaml" "entityId" || return 1
+            _repl_schema_require_text "$method" "$params_yaml" "name" || return 1
+            _repl_schema_require_text "$method" "$params_yaml" "entityType" || return 1
+            ;;
+        workflow.graphrag.relationships.get|workflow.graphrag.relationships.delete)
+            _repl_schema_require_text "$method" "$params_yaml" "relationshipId" || return 1
+            ;;
+        workflow.graphrag.relationships.create)
+            _repl_schema_require_text "$method" "$params_yaml" "sourceEntityId" || return 1
+            _repl_schema_require_text "$method" "$params_yaml" "targetEntityId" || return 1
+            _repl_schema_require_text "$method" "$params_yaml" "relationshipType" || return 1
+            ;;
+        workflow.graphrag.relationships.update)
+            _repl_schema_require_text "$method" "$params_yaml" "relationshipId" || return 1
+            _repl_schema_require_text "$method" "$params_yaml" "sourceEntityId" || return 1
+            _repl_schema_require_text "$method" "$params_yaml" "targetEntityId" || return 1
+            _repl_schema_require_text "$method" "$params_yaml" "relationshipType" || return 1
+            ;;
+    esac
 }
 
 _repl_state_value() {
@@ -403,7 +589,7 @@ _repl_internal_todo_is_enabled() {
 
 _repl_workflow_requirements_is_mutation() {
     case "${1:-}" in
-        createFr|updateFr|deleteFr|createTr|updateTr|deleteTr|createTest|updateTest|deleteTest|createMapping|deleteMapping|generateDocument|ingestDocument) return 0 ;;
+        createFr|createFrBatch|updateFr|updateFrBatch|deleteFr|createTr|createTrBatch|updateTr|updateTrBatch|deleteTr|createTest|createTestBatch|updateTest|updateTestBatch|deleteTest|createBatch|updateBatch|createMapping|deleteMapping|generateDocument|ingestDocument) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -416,7 +602,7 @@ _repl_workflow_requirements_prefers_typed() {
     fi
 
     case "${1:-}" in
-        createFr|updateFr|createTr|updateTr|createTest|updateTest) return 0 ;;
+        createFr|createFrBatch|updateFr|updateFrBatch|createTr|createTrBatch|updateTr|updateTrBatch|createTest|createTestBatch|updateTest|updateTestBatch|createBatch|updateBatch) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -1111,18 +1297,26 @@ _repl_requirements_typed_method() {
         listFr) printf 'client.Requirements.ListFrAsync' ;;
         getFr) printf 'client.Requirements.GetFrAsync' ;;
         createFr) printf 'client.Requirements.CreateFrAsync' ;;
+        createFrBatch) printf 'client.Requirements.CreateFrBatchAsync' ;;
         updateFr) printf 'client.Requirements.UpdateFrAsync' ;;
+        updateFrBatch) printf 'client.Requirements.UpdateFrBatchAsync' ;;
         deleteFr) printf 'client.Requirements.DeleteFrAsync' ;;
         listTr) printf 'client.Requirements.ListTrAsync' ;;
         getTr) printf 'client.Requirements.GetTrAsync' ;;
         createTr) printf 'client.Requirements.CreateTrAsync' ;;
+        createTrBatch) printf 'client.Requirements.CreateTrBatchAsync' ;;
         updateTr) printf 'client.Requirements.UpdateTrAsync' ;;
+        updateTrBatch) printf 'client.Requirements.UpdateTrBatchAsync' ;;
         deleteTr) printf 'client.Requirements.DeleteTrAsync' ;;
         listTest) printf 'client.Requirements.ListTestAsync' ;;
         getTest) printf 'client.Requirements.GetTestAsync' ;;
         createTest) printf 'client.Requirements.CreateTestAsync' ;;
+        createTestBatch) printf 'client.Requirements.CreateTestBatchAsync' ;;
         updateTest) printf 'client.Requirements.UpdateTestAsync' ;;
+        updateTestBatch) printf 'client.Requirements.UpdateTestBatchAsync' ;;
         deleteTest) printf 'client.Requirements.DeleteTestAsync' ;;
+        createBatch) printf 'client.Requirements.CreateBatchAsync' ;;
+        updateBatch) printf 'client.Requirements.UpdateBatchAsync' ;;
         listMappings) printf 'client.Requirements.ListMappingsAsync' ;;
         createMapping) printf 'client.Requirements.UpsertMappingAsync' ;;
         deleteMapping) printf 'client.Requirements.DeleteMappingAsync' ;;
@@ -1263,11 +1457,21 @@ _repl_requirements_existing_for_update() {
 _repl_requirements_typed_params() {
     local operation="$1"
     local params_yaml="${2:-}"
-    local id title body priority status notes area subarea test_type fr_id doc_type format content documents_block source_format preferred_wiki_format existing
+    local id title body priority status notes area subarea test_type fr_id doc_type format content documents_block records_block source_format preferred_wiki_format existing
 
     case "$operation" in
         listFr|listTr|listTest|listMappings)
             return 0
+            ;;
+        createFrBatch|updateFrBatch|createTrBatch|updateTrBatch|createTestBatch|updateTestBatch|createBatch|updateBatch)
+            records_block="$(_repl_list_block_get "$params_yaml" "records")"
+            printf 'request:\n'
+            if [ -n "$records_block" ]; then
+                printf '  records:\n'
+                printf '%s\n' "$records_block" | sed 's/^/    /'
+            else
+                printf '  records: []\n'
+            fi
             ;;
         getFr|getTr|getTest|deleteFr|deleteTr|deleteTest)
             id="$(_repl_yaml_get "$params_yaml" "id")"
@@ -3296,6 +3500,8 @@ EOF
 repl_invoke() {
     local method="$1"
     local params_yaml="${2:-}"
+
+    _repl_schema_validate_method "$method" "$params_yaml" || return $?
 
     case "$method" in
         workflow.sessionlog.bootstrap)

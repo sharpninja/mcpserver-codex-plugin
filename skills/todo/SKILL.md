@@ -9,6 +9,8 @@ All `workflow.todo.*` examples in this skill are intended for
 methods exposed by `mcpserver-repl`. The current wrapper supports CRUD,
 querying, requirements analysis, and selected-TODO state; the streaming prompt
 verbs described later are not exposed in this Codex wrapper.
+If you bypass the wrapper for diagnostics and write to `mcpserver-repl --agent-stdio`
+directly, send one single-line JSON request envelope per stdin message.
 
 Before using any workflow commands, call `workflow.sessionlog.bootstrap` to initialize the session log subsystem:
 
@@ -33,9 +35,10 @@ Do not start with TODO enumeration when session state already identifies the act
 ## Overview
 
 To interact with project TODOs, use the `workflow.todo.*` namespace through
-`lib/repl-invoke.sh`. All commands follow the standard YAML envelope protocol:
-send a `type: request` envelope on stdin, receive a `type: result` or
-`type: error` envelope on stdout.
+`lib/repl-invoke.sh`. The wrapper accepts documented params, validates them,
+and sends a single-line JSON request envelope to `mcpserver-repl --agent-stdio`.
+Direct stdio callers must use the same single-line JSON envelope shape and
+receive `type: result` or `type: error` envelopes on stdout.
 
 ## Codex Internal TODO Tracking Toggle
 
