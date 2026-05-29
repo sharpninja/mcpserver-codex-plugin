@@ -194,4 +194,62 @@ cache_scope_session_state_file() {
     printf '%s/session-state.yaml' "${CACHE_DIR:?CACHE_DIR is not initialized}"
 }
 
-export -f cache_scope_current_turn_file cache_scope_init cache_scope_select_session cache_scope_session_key cache_scope_session_state_file cache_scope_workspace_key cache_scope_workspace_path 2>/dev/null || true
+# =============================================================================
+# V4 parity: base64url workspace key + .mcpServer/failsafe layout
+# Matches V4CacheManager.GetScopedCachePath in @sharpninja/mcpserver-agent-core
+# TR-MCP-AGENT-PARITY-013: cache scoped by workspace key (Base64URL) + agentId
+# =============================================================================
+
+# cache_scope_workspace_key_v4 [workspace_path]
+# Returns Base64URL encoding of the workspace path, matching the TypeScript impl:
+#   Buffer.from(workspaceKey).toString('base64').replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,'')
+cache_scope_workspace_key_v4() {
+    local workspace_path
+    workspace_path="$(_cache_scope_normalize_path "${1:-$(pwd)}")"
+
+    if command -v node >/dev/null 2>&1; then
+        node -e "process.stdout.write(Buffer.from(process.argv[1]).toString('base64').replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,''))" \
+            "$workspace_path" 2>/dev/null && return 0
+    fi
+
+    if command -v openssl >/dev/null 2>&1; then
+        printf '%s' "$workspace_path" | openssl base64 -A 2>/dev/null | tr '+/' '-_' | tr -d '=' && return 0
+    fi
+
+    if command -v python3 >/dev/null 2>&1; then
+        printf '%s' "$workspace_path" | python3 -c \
+            "import sys,base64; print(base64.urlsafe_b64encode(sys.stdin.buffer.read()).decode().rstrip('='))" 2>/dev/null && return 0
+    fi
+
+    printf '%s' "$workspace_path" | base64 2>/dev/null | tr -d '\n' | tr '+/' '-_' | tr -d '='
+}
+
+# cache_scope_v4_failsafe_root [workspace_path] [agent_id]
+# Returns the absolute path to the v4 failsafe root for this workspace + agent.
+# Layout: <workspace_root>/.mcpServer/failsafe/<agentId>/workspaces/<base64url>
+cache_scope_v4_failsafe_root() {
+    local workspace_path="${1:-}"
+    local agent_id="${2:-Codex}"
+
+    if [ -z "$workspace_path" ]; then
+        workspace_path="$(cache_scope_workspace_path)"
+    fi
+
+    local bash_path
+    bash_path="$(_cache_scope_path_for_bash "$workspace_path" 2>/dev/null || printf '%s' "$workspace_path")"
+    local abs_path
+    if [ -d "$bash_path" ]; then
+        abs_path="$(cd "$bash_path" 2>/dev/null && pwd -P || printf '%s' "$bash_path")"
+    else
+        abs_path="$bash_path"
+    fi
+
+    local key
+    key="$(cache_scope_workspace_key_v4 "$abs_path")"
+    printf '%s/.mcpServer/failsafe/%s/workspaces/%s' "$abs_path" "$agent_id" "$key"
+}
+
+export -f cache_scope_current_turn_file cache_scope_init cache_scope_select_session \
+    cache_scope_session_key cache_scope_session_state_file cache_scope_workspace_key \
+    cache_scope_workspace_path cache_scope_workspace_key_v4 cache_scope_v4_failsafe_root \
+    2>/dev/null || true
