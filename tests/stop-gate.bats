@@ -68,18 +68,18 @@ run_stop_gate() {
     run bash "$STOP_GATE"
 }
 
-@test "no turn file → no-turn status" {
+@test "no turn file → schema-valid no-op output" {
     rm -f "$(test_cache_file current-turn.yaml)"
     run_stop_gate
     [ "$status" -eq 0 ]
-    grep -qF '"status":"no-turn"' <<<"$output"
+    [ "$output" = "{}" ]
 }
 
 @test "in_progress turn self-heals to passed when repl-invoke is available" {
     write_turn "in_progress"
     run_stop_gate
     [ "$status" -eq 0 ]
-    grep -qF '"status":"passed"' <<<"$output"
+    [ "$output" = "{}" ]
 }
 
 @test "in_progress turn blocks when repl-invoke cannot be loaded" {
@@ -99,11 +99,11 @@ EOF
     grep -qF "req-test-stop-001" <<<"$output"
 }
 
-@test "completed turn (clean build) → status:passed" {
+@test "completed turn (clean build) → schema-valid no-op output" {
     write_turn "completed"
     run_stop_gate
     [ "$status" -eq 0 ]
-    grep -qF '"status":"passed"' <<<"$output"
+    [ "$output" = "{}" ]
 }
 
 @test "completed turn with failed build + edits → decision:block" {
@@ -119,7 +119,7 @@ EOF
     touch "$(test_cache_file turn-accept-failure.marker)"
     run_stop_gate
     [ "$status" -eq 0 ]
-    grep -qF '"status":"passed"' <<<"$output"
+    [ "$output" = "{}" ]
 }
 
 @test "accept-failure marker is consumed (deleted) after use" {
@@ -153,14 +153,14 @@ response: |
 
     run_stop_gate
     [ "$status" -eq 0 ]
-    grep -qF '"status":"passed"' <<<"$output"
+    [ "$output" = "{}" ]
 }
 
-@test "CLAUDE_STOP_HOOK_ACTIVE=true short-circuits to already-reprompted" {
+@test "CLAUDE_STOP_HOOK_ACTIVE=true short-circuits with schema-valid no-op" {
     write_turn "in_progress"
     export CLAUDE_STOP_HOOK_ACTIVE=true
     run_stop_gate
     unset CLAUDE_STOP_HOOK_ACTIVE
     [ "$status" -eq 0 ]
-    grep -qF '"status":"already-reprompted"' <<<"$output"
+    [ "$output" = "{}" ]
 }
