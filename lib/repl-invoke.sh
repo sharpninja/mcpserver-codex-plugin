@@ -193,7 +193,11 @@ _repl_schema_validate_method() {
     local params_yaml="${2:-}"
     case "$method" in
         workflow.sessionlog.openSession)
-            _repl_schema_require_text "$method" "$params_yaml" "sessionId" || return 1
+            # sessionId is intentionally NOT required: the openSession handler
+            # generates a canonical <Agent>-<timestamp>-<slug> id when the caller
+            # omits it (see _repl_workflow_open_session), and begin_turn auto-opens
+            # a session with empty params. Requiring sessionId here breaks both
+            # paths and contradicts the workspace rule that ids are plugin-generated.
             _repl_schema_require_text "$method" "$params_yaml" "title" || return 1
             ;;
         workflow.sessionlog.beginTurn)
