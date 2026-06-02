@@ -358,6 +358,30 @@ read_edits() {
     grep '^codeEdits:' "$(test_cache_file current-turn.yaml)" | head -1 | sed 's/^codeEdits:[[:space:]]*//'
 }
 
+# PLAN-SESSIONLOGENFORCEMENT-001 helpers: a turn cache carrying the audit-counter schema
+# plus a reader for any audit field.
+write_audit_turn() {
+    local status="${1:-in_progress}" edits="${2:-0}"
+    refresh_test_cache
+    cat > "$TEST_CACHE_DIR/current-turn.yaml" <<EOF
+turnRequestId: req-test-audit-001
+queryTitle: Audit test
+openedAt: 2026-04-19T00:00:00Z
+status: ${status}
+codeEdits: ${edits}
+lastBuildStatus: unknown
+auditActions: 0
+auditDialog: 0
+auditDecisions: 0
+auditFiles: 0
+auditCommits: 0
+EOF
+}
+
+read_audit() {
+    grep "^$1:" "$(test_cache_file current-turn.yaml)" | head -1 | sed "s/^$1:[[:space:]]*//"
+}
+
 @test "internal TODO tracking defaults off and can be toggled in cache" {
     source "$LIB"
 
@@ -471,6 +495,95 @@ response: |
     type: edit
     filePath: src/c.cs"
     [ "$(read_edits)" = "2" ]
+}
+
+@test "beginTurn initializes audit counters in current-turn.yaml" {
+    source "$LIB"
+    rm -f "$(test_cache_file current-turn.yaml)"
+    run repl_invoke "workflow.sessionlog.beginTurn" "requestId: req-test-audit-init-001
+queryTitle: Audit init
+queryText: |
+  Do the work."
+    [ "$status" -eq 0 ]
+    [ "$(read_audit auditActions)" = "0" ]
+    [ "$(read_audit auditDialog)" = "0" ]
+    [ "$(read_audit auditDecisions)" = "0" ]
+    [ "$(read_audit auditFiles)" = "0" ]
+    [ "$(read_audit auditCommits)" = "0" ]
+}
+
+@test "appendActions bumps audit counters for actions, files, decisions, commits" {
+    write_audit_turn "in_progress" 0
+    source "$LIB"
+    repl_invoke "workflow.sessionlog.appendActions" "actions:
+  - description: edit a
+    type: edit
+    filePath: src/a.cs
+  - description: decide b
+    type: design_decision
+  - description: commit c
+    type: commit"
+    [ "$(read_audit auditActions)" = "3" ]
+    [ "$(read_audit auditFiles)" = "1" ]
+    [ "$(read_audit auditDecisions)" = "1" ]
+    [ "$(read_audit auditCommits)" = "1" ]
+}
+
+@test "appendDialog bumps audit dialog and decision counters" {
+    write_audit_turn "in_progress" 0
+    cat > "$(test_cache_file session-state.yaml)" <<EOF
+status: verified
+sessionId: Codex-20260419T000000Z-test
+sourceType: Codex
+workspacePath: "/tmp/ws"
+workspace: "test"
+baseUrl: "http://localhost:1"
+timestamp: "2026-04-19T00:00:00Z"
+EOF
+    source "$LIB"
+    repl_invoke "workflow.sessionlog.appendDialog" "dialogItems:
+  - timestamp: 2026-04-19T00:00:01Z
+    role: model
+    content: reasoning about the change
+    category: reasoning
+  - timestamp: 2026-04-19T00:00:02Z
+    role: model
+    content: chose approach X over Y
+    category: decision" >/dev/null 2>&1 || true
+    [ "$(read_audit auditDialog)" = "2" ]
+    [ "$(read_audit auditDecisions)" -ge 1 ]
+}
+
+@test "workflow.sessionlog.audit reports incomplete for code-edit turn missing audit" {
+    write_audit_turn "in_progress" 2
+    source "$LIB"
+    run repl_invoke "workflow.sessionlog.audit" ""
+    [ "$status" -eq 0 ]
+    echo "$output" | grep -q "complete: false"
+    echo "$output" | grep -q "actions"
+}
+
+@test "workflow.sessionlog.audit reports complete for a no-code-edit turn" {
+    write_audit_turn "in_progress" 0
+    source "$LIB"
+    run repl_invoke "workflow.sessionlog.audit" ""
+    [ "$status" -eq 0 ]
+    echo "$output" | grep -q "complete: true"
+}
+
+@test "workflow.sessionlog.closeTurn appends actions then completes with audit recorded" {
+    write_audit_turn "in_progress" 0
+    source "$LIB"
+    run repl_invoke "workflow.sessionlog.closeTurn" "response: |
+  Implemented and validated.
+actions:
+  - description: edit x
+    type: edit
+    filePath: src/x.cs"
+    [ "$status" -eq 0 ]
+    [ "$(read_status)" = "completed" ]
+    [ "$(read_audit auditActions)" = "1" ]
+    [ "$(read_audit auditFiles)" = "1" ]
 }
 
 @test "beginTurn creates current-turn.yaml when called directly" {
@@ -677,6 +790,46 @@ implementationTasks:
     printf '%s\n' "$body" | grep -q '"section":"Backlog"'
     printf '%s\n' "$body" | grep -q '"doneSummary":"Finished from JSON"'
     ! printf '%s\n' "$body" | grep -q '"request"'
+}
+
+@test "TODO HTTP body preserves blank lines and indentation in description Markdown" {
+    # ISS-TODO-001 (FR-MCP-108): description is formatted Markdown. The HTTP-fallback
+    # array builder must keep blank-line entries and leading indentation so fenced code
+    # blocks and paragraph spacing survive instead of being collapsed.
+    write_requirements_state
+    source "$LIB"
+
+    body="$(_repl_todo_json_body "create" "id: MD-PLUGIN-001
+title: Markdown body
+section: Backlog
+priority: low
+description:
+  - '# Heading'
+  - ''
+  - '    int y = 2;'")"
+
+    printf '%s\n' "$body" | grep -q '"description":\["# Heading","","    int y = 2;"\]'
+}
+
+@test "TODO typed params preserve multi-line Markdown description verbatim" {
+    # ISS-TODO-001 (FR-MCP-108): the typed-client path wraps raw YAML under request: and
+    # must not strip blank-line list entries from the description before the server parses it.
+    write_requirements_state
+    source "$LIB"
+
+    typed_params="$(_repl_todo_typed_params "create" "id: MD-PLUGIN-002
+title: Markdown typed
+section: Backlog
+priority: low
+description:
+  - '# Heading'
+  - ''
+  - '    int y = 2;'")"
+
+    printf '%s\n' "$typed_params" | grep -q "^request:"
+    printf '%s\n' "$typed_params" | grep -q "^    - '# Heading'"
+    printf '%s\n' "$typed_params" | grep -q "^    - ''"
+    printf '%s\n' "$typed_params" | grep -q "^    - '    int y = 2;'"
 }
 
 @test "workflow.todo.create HTTP fallback preserves 4xx response body" {

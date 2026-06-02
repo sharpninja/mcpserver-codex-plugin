@@ -101,6 +101,37 @@ if [ "$CODE_EDITS" -gt 0 ] && [ "$BUILD_STATUS" = "failed" ]; then
     fi
 fi
 
+# Gate 3 — session-log audit completeness after code edits (PLAN-SESSIONLOGENFORCEMENT-001).
+# A turn that changed code must record at least one action, one modified file, and one
+# reasoning/decision dialog entry so completed turns are not finalized with empty audit
+# data. Enforced only when the turn carries the audit schema (auditActions present); turn
+# caches that predate the audit fields are exempt and remain backward compatible.
+if grep -q '^auditActions:' "$TURN_FILE" 2>/dev/null && [ "$CODE_EDITS" -gt 0 ]; then
+    AUDIT_ACTIONS="$(grep '^auditActions:' "$TURN_FILE" | head -1 | sed 's/^auditActions:[[:space:]]*//')"
+    AUDIT_FILES="$(grep '^auditFiles:' "$TURN_FILE" | head -1 | sed 's/^auditFiles:[[:space:]]*//')"
+    AUDIT_DIALOG="$(grep '^auditDialog:' "$TURN_FILE" | head -1 | sed 's/^auditDialog:[[:space:]]*//')"
+    AUDIT_DECISIONS="$(grep '^auditDecisions:' "$TURN_FILE" | head -1 | sed 's/^auditDecisions:[[:space:]]*//')"
+    AUDIT_ACTIONS="${AUDIT_ACTIONS:-0}"
+    AUDIT_FILES="${AUDIT_FILES:-0}"
+    AUDIT_DIALOG="${AUDIT_DIALOG:-0}"
+    AUDIT_DECISIONS="${AUDIT_DECISIONS:-0}"
+    MISSING=""
+    [ "$AUDIT_ACTIONS" -ge 1 ] 2>/dev/null || MISSING="${MISSING} actions"
+    [ "$AUDIT_FILES" -ge 1 ] 2>/dev/null || MISSING="${MISSING} filesModified"
+    if ! { [ "$AUDIT_DIALOG" -ge 1 ] 2>/dev/null || [ "$AUDIT_DECISIONS" -ge 1 ] 2>/dev/null; }; then
+        MISSING="${MISSING} processingDialog/designDecisions"
+    fi
+    if [ -n "$MISSING" ]; then
+        if [ -f "$CACHE_DIR/turn-accept-incomplete-audit.marker" ]; then
+            rm -f "$CACHE_DIR/turn-accept-incomplete-audit.marker"
+        else
+            REASON="Turn ${TURN_ID} made ${CODE_EDITS} code edit(s) but the session-log audit is incomplete (missing:${MISSING}). Record them with workflow.sessionlog.appendActions and appendDialog (or workflow.sessionlog.closeTurn), or write the scoped turn-accept-incomplete-audit.marker to accept."
+            printf '{"decision":"block","reason":"%s"}\n' "$REASON"
+            exit 0
+        fi
+    fi
+fi
+
 # All gates passed. Emit the canonical schema-valid no-op (allow the stop).
 printf '{}\n'
 exit 0

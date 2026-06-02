@@ -68,6 +68,27 @@ run_stop_gate() {
     run bash "$STOP_GATE"
 }
 
+# PLAN-SESSIONLOGENFORCEMENT-001: a turn cache carrying the audit-counter schema, so Gate 3
+# audit enforcement can be exercised. Defaults represent a completed code-edit turn with a
+# clean build and zero recorded audit data.
+write_audit_turn() {
+    local status="${1:-completed}" edits="${2:-3}" actions="${3:-0}" files="${4:-0}" dialog="${5:-0}" decisions="${6:-0}"
+    refresh_test_cache
+    cat > "$TEST_CACHE_DIR/current-turn.yaml" <<EOF
+turnRequestId: req-test-stop-001
+queryTitle: Stop gate audit test
+openedAt: 2026-04-19T00:00:00Z
+status: ${status}
+codeEdits: ${edits}
+lastBuildStatus: success
+auditActions: ${actions}
+auditDialog: ${dialog}
+auditDecisions: ${decisions}
+auditFiles: ${files}
+auditCommits: 0
+EOF
+}
+
 @test "no turn file → schema-valid no-op output" {
     rm -f "$(test_cache_file current-turn.yaml)"
     run_stop_gate
@@ -161,6 +182,46 @@ response: |
     export CLAUDE_STOP_HOOK_ACTIVE=true
     run_stop_gate
     unset CLAUDE_STOP_HOOK_ACTIVE
+    [ "$status" -eq 0 ]
+    [ "$output" = "{}" ]
+}
+
+@test "completed code-edit turn with audit schema but no audit data → decision:block" {
+    write_audit_turn "completed" 3 0 0 0 0
+    run_stop_gate
+    [ "$status" -eq 0 ]
+    grep -qF '"decision":"block"' <<<"$output"
+    grep -qF "audit is incomplete" <<<"$output"
+}
+
+@test "completed code-edit turn with full audit data → schema-valid no-op output" {
+    write_audit_turn "completed" 3 2 1 1 0
+    run_stop_gate
+    [ "$status" -eq 0 ]
+    [ "$output" = "{}" ]
+}
+
+@test "accept-incomplete-audit marker unblocks audit-incomplete stop and is consumed" {
+    write_audit_turn "completed" 3 0 0 0 0
+    marker_file="$(test_cache_file turn-accept-incomplete-audit.marker)"
+    touch "$marker_file"
+    run_stop_gate
+    [ "$status" -eq 0 ]
+    [ "$output" = "{}" ]
+    [ ! -f "$marker_file" ]
+}
+
+@test "legacy turn without audit schema is exempt from the audit gate" {
+    # write_turn emits no audit* fields, mirroring caches created before the audit schema.
+    write_turn "completed" 3 "success"
+    run_stop_gate
+    [ "$status" -eq 0 ]
+    [ "$output" = "{}" ]
+}
+
+@test "audit-schema turn with zero code edits is not blocked by the audit gate" {
+    write_audit_turn "completed" 0 0 0 0 0
+    run_stop_gate
     [ "$status" -eq 0 ]
     [ "$output" = "{}" ]
 }

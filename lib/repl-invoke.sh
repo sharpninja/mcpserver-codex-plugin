@@ -2942,6 +2942,69 @@ _repl_workflow_open_session() {
   started: ${started}"
 }
 
+# PLAN-SESSIONLOGENFORCEMENT-001: increment (or create) a numeric audit counter in
+# current-turn.yaml. Adds the field at the end of the file when it is missing so turns
+# created before the audit schema existed are upgraded in place on first append.
+_repl_turn_bump() {
+    local turn_file="$1" field="$2" delta="$3" current new tmp
+    [ -f "$turn_file" ] || return 0
+    [ -n "$delta" ] || delta=0
+    case "$delta" in (*[!0-9]*) delta=0 ;; esac
+    [ "$delta" -eq 0 ] && return 0
+    current="$(grep "^${field}:" "$turn_file" 2>/dev/null | head -1 | sed "s/^${field}:[[:space:]]*//" || true)"
+    current="${current:-0}"
+    case "$current" in (*[!0-9]*) current=0 ;; esac
+    new=$((current + delta))
+    tmp="${turn_file}.tmp.$$"
+    if grep -q "^${field}:" "$turn_file"; then
+        awk -v f="$field" -v n="$new" '
+            index($0, f ":") == 1 { print f ": " n; next }
+            { print }
+        ' "$turn_file" > "$tmp" && mv "$tmp" "$turn_file"
+    else
+        cp "$turn_file" "$tmp" && printf '%s: %s\n' "$field" "$new" >> "$tmp" && mv "$tmp" "$turn_file"
+    fi
+}
+
+# PLAN-SESSIONLOGENFORCEMENT-001: count occurrences of a fixed-string pattern in the params.
+_repl_count_lines() {
+    local params="$1" pattern="$2" count
+    count="$(printf '%s\n' "$params" | grep -c "$pattern" 2>/dev/null || true)"
+    count="${count:-0}"
+    case "$count" in (*[!0-9]*) count=0 ;; esac
+    printf '%s' "$count"
+}
+
+# PLAN-SESSIONLOGENFORCEMENT-001: a turn carries the audit schema once begin_turn (or a
+# prior append) has written the auditActions counter. Used to keep enforcement backward
+# compatible with legacy turn caches that predate the audit fields.
+_repl_turn_has_audit_schema() {
+    local turn_file="$1"
+    [ -f "$turn_file" ] && grep -q '^auditActions:' "$turn_file"
+}
+
+# PLAN-SESSIONLOGENFORCEMENT-001: emit `complete: true/false` plus the missing required
+# fields for the current turn. A turn with no code edits is complete by definition; a
+# code-edit turn must record at least one action, one modified file, and one reasoning or
+# decision dialog entry before it can finalize.
+_repl_turn_audit_missing() {
+    local turn_file="$1" code_edits actions files dialog decisions missing=""
+    code_edits="$(grep '^codeEdits:' "$turn_file" 2>/dev/null | head -1 | sed 's/^codeEdits:[[:space:]]*//' || true)"
+    code_edits="${code_edits:-0}"
+    case "$code_edits" in (*[!0-9]*) code_edits=0 ;; esac
+    [ "$code_edits" -eq 0 ] && return 0
+    actions="$(grep '^auditActions:' "$turn_file" 2>/dev/null | head -1 | sed 's/^auditActions:[[:space:]]*//' || true)"
+    files="$(grep '^auditFiles:' "$turn_file" 2>/dev/null | head -1 | sed 's/^auditFiles:[[:space:]]*//' || true)"
+    dialog="$(grep '^auditDialog:' "$turn_file" 2>/dev/null | head -1 | sed 's/^auditDialog:[[:space:]]*//' || true)"
+    decisions="$(grep '^auditDecisions:' "$turn_file" 2>/dev/null | head -1 | sed 's/^auditDecisions:[[:space:]]*//' || true)"
+    [ "${actions:-0}" -ge 1 ] 2>/dev/null || missing="${missing} actions"
+    [ "${files:-0}" -ge 1 ] 2>/dev/null || missing="${missing} filesModified"
+    if ! { [ "${dialog:-0}" -ge 1 ] 2>/dev/null || [ "${decisions:-0}" -ge 1 ] 2>/dev/null; }; then
+        missing="${missing} processingDialog/designDecisions"
+    fi
+    printf '%s' "${missing# }"
+}
+
 _repl_workflow_begin_turn() {
     local params="$1"
     local turn_file="${REPL_INVOKE_CACHE_DIR}/current-turn.yaml"
@@ -2972,6 +3035,11 @@ openedAt: ${opened_at}
 status: in_progress
 codeEdits: 0
 lastBuildStatus: unknown
+auditActions: 0
+auditDialog: 0
+auditDecisions: 0
+auditFiles: 0
+auditCommits: 0
 queryText: |
 $(printf '%s\n' "$query_text" | sed 's/^/  /')
 EOF
@@ -3018,6 +3086,18 @@ _repl_workflow_append_dialog() {
     items_block="$(_repl_normalized_dialog_items_block "$params")"
     [ -z "$items_block" ] && return 1
 
+    # PLAN-SESSIONLOGENFORCEMENT-001: record dialog and decision counts locally so the turn
+    # audit reflects reasoning even when the remote submit is unavailable.
+    local turn_file="${REPL_INVOKE_CACHE_DIR}/current-turn.yaml"
+    if [ -f "$turn_file" ]; then
+        local dialog_count decision_count
+        dialog_count="$(_repl_count_lines "$params" '^[[:space:]]*-\{0,1\}[[:space:]]*role:')"
+        [ "$dialog_count" -eq 0 ] 2>/dev/null && dialog_count="$(_repl_count_lines "$params" '^[[:space:]]*content:')"
+        decision_count="$(_repl_count_lines "$params" '^[[:space:]]*category:[[:space:]]*decision')"
+        _repl_turn_bump "$turn_file" "auditDialog" "$dialog_count"
+        _repl_turn_bump "$turn_file" "auditDecisions" "$decision_count"
+    fi
+
     local invoke_params="agent: ${source_type}
 sessionId: ${session_id}
 requestId: ${request_id}
@@ -3061,6 +3141,18 @@ _repl_workflow_append_actions() {
         /^codeEdits:/ { print "codeEdits: " n; next }
         { print }
     ' "$turn_file" > "$tmp" && mv "$tmp" "$turn_file"
+
+    # PLAN-SESSIONLOGENFORCEMENT-001: keep per-turn audit counters in sync so the stop-gate
+    # and audit report can prove the turn recorded actions, modified files, design decisions,
+    # and commits instead of relying on agent discipline.
+    local action_count decision_count commit_count
+    action_count="$(_repl_count_lines "$params" '^[[:space:]]*type:')"
+    decision_count="$(_repl_count_lines "$params" '^[[:space:]]*type:[[:space:]]*design_decision')"
+    commit_count="$(_repl_count_lines "$params" '^[[:space:]]*type:[[:space:]]*commit')"
+    _repl_turn_bump "$turn_file" "auditActions" "$action_count"
+    _repl_turn_bump "$turn_file" "auditFiles" "$added"
+    _repl_turn_bump "$turn_file" "auditDecisions" "$decision_count"
+    _repl_turn_bump "$turn_file" "auditCommits" "$commit_count"
 
     local req_id title status actions_block
     req_id="$(_repl_current_turn_value "turnRequestId")"
@@ -3123,6 +3215,57 @@ _repl_workflow_complete_turn() {
     _repl_persist_turn "$req_id" "$title" "completed" "$response_text" "" || true
     _repl_emit_response "  ok: true
   status: completed"
+}
+
+# PLAN-SESSIONLOGENFORCEMENT-001: single close-turn helper. Appends any supplied actions
+# and dialog items (so their audit counters are recorded) and then completes the turn in
+# one call, giving agents a way to finalize with full audit data instead of a bare
+# completeTurn that leaves actions/dialog/decisions empty.
+_repl_workflow_close_turn() {
+    local params="$1"
+    local turn_file="${REPL_INVOKE_CACHE_DIR}/current-turn.yaml"
+
+    if printf '%s\n' "$params" | grep -q '^[[:space:]]*actions:'; then
+        _repl_workflow_append_actions "$params" >/dev/null 2>&1 || true
+    fi
+    if printf '%s\n' "$params" | grep -q '^[[:space:]]*dialogItems:'; then
+        _repl_workflow_append_dialog "$params" >/dev/null 2>&1 || true
+    fi
+
+    _repl_workflow_complete_turn "$params"
+}
+
+# PLAN-SESSIONLOGENFORCEMENT-001: report per-turn audit completeness so an agent (or the
+# stop-gate) can detect a completed turn that is missing actions, modified files, or
+# reasoning. Emits the counters plus a `complete` verdict and the list of missing fields.
+_repl_workflow_audit() {
+    local turn_file="${REPL_INVOKE_CACHE_DIR}/current-turn.yaml"
+    if [ ! -f "$turn_file" ]; then
+        _repl_emit_response "  complete: false
+  reason: no active turn"
+        return 0
+    fi
+
+    local status code_edits actions files dialog decisions commits missing complete
+    status="$(_repl_current_turn_value "status")"
+    code_edits="$(_repl_current_turn_value "codeEdits")"; code_edits="${code_edits:-0}"
+    actions="$(_repl_current_turn_value "auditActions")"; actions="${actions:-0}"
+    files="$(_repl_current_turn_value "auditFiles")"; files="${files:-0}"
+    dialog="$(_repl_current_turn_value "auditDialog")"; dialog="${dialog:-0}"
+    decisions="$(_repl_current_turn_value "auditDecisions")"; decisions="${decisions:-0}"
+    commits="$(_repl_current_turn_value "auditCommits")"; commits="${commits:-0}"
+    missing="$(_repl_turn_audit_missing "$turn_file")"
+    if [ -z "$missing" ]; then complete="true"; else complete="false"; fi
+
+    _repl_emit_response "  complete: ${complete}
+  status: ${status:-unknown}
+  codeEdits: ${code_edits}
+  auditActions: ${actions}
+  auditFiles: ${files}
+  auditDialog: ${dialog}
+  auditDecisions: ${decisions}
+  auditCommits: ${commits}
+  missing: ${missing:-none}"
 }
 
 _repl_workflow_query_history() {
@@ -3536,6 +3679,14 @@ repl_invoke() {
             _repl_workflow_complete_turn "$params_yaml"
             return $?
             ;;
+        workflow.sessionlog.closeTurn)
+            _repl_workflow_close_turn "$params_yaml"
+            return $?
+            ;;
+        workflow.sessionlog.audit)
+            _repl_workflow_audit
+            return $?
+            ;;
         workflow.sessionlog.queryHistory|workflow.sessionlog.getHistory)
             _repl_workflow_query_history "$params_yaml"
             return $?
@@ -3642,4 +3793,4 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     exit $?
 fi
 
-export -f repl_invoke repl_build_envelope _repl_bool_to_enabled _repl_compat_marker_endpoint_field _repl_compat_marker_field _repl_create_compat_marker _repl_failsafe_clear _repl_failsafe_dir _repl_failsafe_plugin_name _repl_failsafe_workspace_root _repl_failsafe_write _repl_first_param_text _repl_internal_todo_is_enabled _repl_internal_todo_mode_value _repl_internal_todo_state_file _repl_invoke_raw _repl_invoke_raw_in_workspace _repl_invoke_with_fallback _repl_bootstrap_state _repl_emit_response _repl_generate_session_id _repl_json_escape _repl_normalized_actions_block _repl_normalized_dialog_items_block _repl_param_text _repl_path_for_bash _repl_path_for_repl _repl_pending_import_file _repl_pending_import_todo_exists _repl_persist_turn _repl_requirements_bootstrap_state _repl_requirements_existing_for_update _repl_requirements_generate_http_fallback _repl_requirements_normalize_generate_response _repl_requirements_typed_doc_type _repl_requirements_typed_method _repl_requirements_typed_params _repl_requirements_update_get_method _repl_requirements_update_workflow_get_method _repl_requirements_workflow_doc_type _repl_requirements_workflow_params _repl_requirement_list_field _repl_response_has_empty_result _repl_response_is_error _repl_response_is_nonempty_success _repl_run_repl_with_timeout _repl_session_meta _repl_session_state_value _repl_sessionlog_import_recovery_http_fallback _repl_sessionlog_submit_http_fallback _repl_state_value _repl_submit_session _repl_todo_http_fallback _repl_todo_json_body _repl_turns_block _repl_url_path_segment _repl_workflow_append_actions _repl_workflow_append_dialog _repl_workflow_begin_turn _repl_workflow_bootstrap _repl_workflow_complete_turn _repl_workflow_import_pending _repl_workflow_import_recovery _repl_workflow_open_session _repl_workflow_query_history _repl_workflow_requirements _repl_workflow_requirements_is_mutation _repl_workflow_requirements_prefers_typed _repl_workflow_todo _repl_workflow_todo_internal_tracking _repl_workflow_todo_is_mutation _repl_workflow_todo_select _repl_workflow_todo_update_selected _repl_workflow_update_turn _repl_yaml_block_get _repl_yaml_field _repl_yaml_get 2>/dev/null || true
+export -f repl_invoke repl_build_envelope _repl_bool_to_enabled _repl_compat_marker_endpoint_field _repl_compat_marker_field _repl_create_compat_marker _repl_failsafe_clear _repl_failsafe_dir _repl_failsafe_plugin_name _repl_failsafe_workspace_root _repl_failsafe_write _repl_first_param_text _repl_internal_todo_is_enabled _repl_internal_todo_mode_value _repl_internal_todo_state_file _repl_invoke_raw _repl_invoke_raw_in_workspace _repl_invoke_with_fallback _repl_bootstrap_state _repl_emit_response _repl_generate_session_id _repl_json_escape _repl_normalized_actions_block _repl_normalized_dialog_items_block _repl_param_text _repl_path_for_bash _repl_path_for_repl _repl_pending_import_file _repl_pending_import_todo_exists _repl_persist_turn _repl_requirements_bootstrap_state _repl_requirements_existing_for_update _repl_requirements_generate_http_fallback _repl_requirements_normalize_generate_response _repl_requirements_typed_doc_type _repl_requirements_typed_method _repl_requirements_typed_params _repl_requirements_update_get_method _repl_requirements_update_workflow_get_method _repl_requirements_workflow_doc_type _repl_requirements_workflow_params _repl_requirement_list_field _repl_response_has_empty_result _repl_response_is_error _repl_response_is_nonempty_success _repl_run_repl_with_timeout _repl_session_meta _repl_session_state_value _repl_sessionlog_import_recovery_http_fallback _repl_sessionlog_submit_http_fallback _repl_state_value _repl_submit_session _repl_todo_http_fallback _repl_todo_json_body _repl_turns_block _repl_url_path_segment _repl_turn_bump _repl_count_lines _repl_turn_has_audit_schema _repl_turn_audit_missing _repl_workflow_audit _repl_workflow_close_turn _repl_workflow_append_actions _repl_workflow_append_dialog _repl_workflow_begin_turn _repl_workflow_bootstrap _repl_workflow_complete_turn _repl_workflow_import_pending _repl_workflow_import_recovery _repl_workflow_open_session _repl_workflow_query_history _repl_workflow_requirements _repl_workflow_requirements_is_mutation _repl_workflow_requirements_prefers_typed _repl_workflow_todo _repl_workflow_todo_internal_tracking _repl_workflow_todo_is_mutation _repl_workflow_todo_select _repl_workflow_todo_update_selected _repl_workflow_update_turn _repl_yaml_block_get _repl_yaml_field _repl_yaml_get 2>/dev/null || true
