@@ -1193,3 +1193,20 @@ Remaining next steps:
 4. Add the equivalent Cline Jest regression around `src/transport/repl-bridge.ts` and `src/tools/session-shim.ts`.
 5. Build the cross-plugin harness and run the parity scenario against all four local repos.
 6. Only after automated parity passes, run manual host integration validation.
+## 2026-06-03 REQAC Plugin Rollout Evidence
+
+Scope: `FR-MCP-REQACPLUGIN-001`, `TR-MCP-REQACPLUGIN-001`, and `TEST-MCP-REQACPLUGIN-BASH`.
+
+Changes under validation:
+- `workflow.requirements.createFr` and `workflow.requirements.createTest` preserve `acceptanceCriteria` YAML blocks in typed params.
+- `workflow.requirements.updateFr` hydrates existing `acceptanceCriteria` during partial updates.
+- `workflow.requirements.copyAcceptanceCriteriaFromTodo` exposes the copy-from-TODO endpoint through the plugin wrapper.
+
+Commands run:
+- `bash -n lib/repl-invoke.sh` passed.
+- `bats --tap -f acceptanceCriteria tests/repl-invoke-shim.bats` passed.
+- `bats --tap -f copyAcceptanceCriteriaFromTodo tests/repl-invoke-shim.bats` passed.
+
+Residual validation note:
+- The monolithic Codex `bats --tap tests/repl-invoke-shim.bats` run reached 39/59 passing tests and then hit the 600 second timeout. The remaining Codex tests passed when split by functional filters. Treat full-suite runtime stabilization as separate from the focused REQAC behavior checks.
+

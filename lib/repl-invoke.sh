@@ -593,7 +593,7 @@ _repl_internal_todo_is_enabled() {
 
 _repl_workflow_requirements_is_mutation() {
     case "${1:-}" in
-        createFr|createFrBatch|updateFr|updateFrBatch|deleteFr|createTr|createTrBatch|updateTr|updateTrBatch|deleteTr|createTest|createTestBatch|updateTest|updateTestBatch|deleteTest|createBatch|updateBatch|createMapping|deleteMapping|generateDocument|ingestDocument) return 0 ;;
+        createFr|createFrBatch|updateFr|updateFrBatch|deleteFr|createTr|createTrBatch|updateTr|updateTrBatch|deleteTr|createTest|createTestBatch|updateTest|updateTestBatch|deleteTest|createBatch|updateBatch|createMapping|deleteMapping|generateDocument|ingestDocument|copyAcceptanceCriteriaFromTodo) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -1233,6 +1233,42 @@ _repl_yaml_field() {
     fi
 }
 
+# FR-MCP-REQACPLUGIN-001 / TR-MCP-REQACPLUGIN-001: emit the acceptanceCriteria YAML block
+# under the given indent when one is present in the source YAML. Supports the canonical
+# server shape:
+#   acceptanceCriteria:
+#     - id: ac-1
+#       text: ...
+#       isSatisfied: true
+#       evidence: ...
+# Returns 0 (no output) when no block is present, so call sites can use it unconditionally.
+_repl_emit_acceptance_criteria_block() {
+    local indent="$1"
+    local source_yaml="$2"
+    local block
+    block="$(_repl_list_block_get "$source_yaml" "acceptanceCriteria" 2>/dev/null || true)"
+    [ -z "$block" ] && return 0
+    printf '%sacceptanceCriteria:\n' "$indent"
+    printf '%s\n' "$block" | sed "s/^/${indent}  /"
+    return 0
+}
+
+# FR-MCP-REQACPLUGIN-001: hydration helper for partial updates. Emits acceptanceCriteria
+# from $params_yaml when present, else from $existing_yaml when present, else nothing.
+# Always returns 0 so the call site under set -e / strict-mode test runners is not aborted
+# by the trailing predicate's exit status.
+_repl_emit_acceptance_criteria_hydrate() {
+    local indent="$1"
+    local params_yaml="$2"
+    local existing_yaml="$3"
+    if printf '%s\n' "$params_yaml" | grep -qE '^[[:space:]]*acceptanceCriteria:[[:space:]]*$'; then
+        _repl_emit_acceptance_criteria_block "$indent" "$params_yaml"
+    elif [ -n "$existing_yaml" ]; then
+        _repl_emit_acceptance_criteria_block "$indent" "$existing_yaml"
+    fi
+    return 0
+}
+
 _repl_requirement_list_field() {
     local params_yaml="$1"
     local key="$2"
@@ -1495,6 +1531,7 @@ _repl_requirements_typed_params() {
             _repl_yaml_field "  " "priority" "$priority"
             _repl_yaml_field "  " "area" "$area"
             _repl_yaml_field "  " "notes" "$notes"
+            _repl_emit_acceptance_criteria_block "  " "$params_yaml"
             ;;
         updateFr)
             id="$(_repl_yaml_get "$params_yaml" "id")"
@@ -1515,6 +1552,7 @@ _repl_requirements_typed_params() {
             _repl_yaml_field "  " "priority" "$priority"
             _repl_yaml_field "  " "status" "$status"
             _repl_yaml_field "  " "notes" "$notes"
+            _repl_emit_acceptance_criteria_hydrate "  " "$params_yaml" "$existing"
             ;;
         createTr)
             id="$(_repl_yaml_get "$params_yaml" "id")"
@@ -1532,6 +1570,7 @@ _repl_requirements_typed_params() {
             _repl_yaml_field "  " "area" "$area"
             _repl_yaml_field "  " "subarea" "$subarea"
             _repl_yaml_field "  " "notes" "$notes"
+            _repl_emit_acceptance_criteria_block "  " "$params_yaml"
             ;;
         updateTr)
             id="$(_repl_yaml_get "$params_yaml" "id")"
@@ -1552,6 +1591,7 @@ _repl_requirements_typed_params() {
             _repl_yaml_field "  " "priority" "$priority"
             _repl_yaml_field "  " "status" "$status"
             _repl_yaml_field "  " "notes" "$notes"
+            _repl_emit_acceptance_criteria_hydrate "  " "$params_yaml" "$existing"
             ;;
         createTest)
             id="$(_repl_yaml_get "$params_yaml" "id")"
@@ -1569,6 +1609,7 @@ _repl_requirements_typed_params() {
             _repl_yaml_field "  " "area" "$area"
             _repl_yaml_field "  " "testType" "$test_type"
             _repl_yaml_field "  " "notes" "$notes"
+            _repl_emit_acceptance_criteria_block "  " "$params_yaml"
             ;;
         updateTest)
             id="$(_repl_yaml_get "$params_yaml" "id")"
@@ -1589,6 +1630,7 @@ _repl_requirements_typed_params() {
             _repl_yaml_field "  " "priority" "$priority"
             _repl_yaml_field "  " "status" "$status"
             _repl_yaml_field "  " "notes" "$notes"
+            _repl_emit_acceptance_criteria_hydrate "  " "$params_yaml" "$existing"
             ;;
         createMapping)
             fr_id="$(_repl_yaml_get "$params_yaml" "frId")"
@@ -2132,6 +2174,83 @@ _repl_requirements_list_http_fallback() {
     rm -f "$tmp_body" "$tmp_headers"
 }
 
+_repl_requirements_copy_acceptance_http_fallback() {
+    local params_yaml="${1:-}"
+    local workspace_path workspace_path_bash base_url marker_file api_key kind id todo_id route body
+
+    if ! command -v curl >/dev/null 2>&1; then
+        return 1
+    fi
+
+    workspace_path="$(_repl_unquote "$(_repl_session_state_value "workspacePath")")"
+    base_url="${MCPSERVER_BASE_URL:-$(_repl_unquote "$(_repl_session_state_value "baseUrl")")}"
+
+    workspace_path_bash="$(_repl_path_for_bash "$workspace_path" 2>/dev/null || true)"
+    if ! declare -F find_marker_file >/dev/null 2>&1 || ! declare -F parse_marker_field >/dev/null 2>&1; then
+        # shellcheck source=./marker-resolver.sh
+        source "${REPL_INVOKE_SCRIPT_DIR}/marker-resolver.sh" || return 1
+        set +e
+    fi
+    marker_file=""
+    if [ -n "$workspace_path_bash" ] && declare -F find_marker_file >/dev/null 2>&1; then
+        marker_file="$(find_marker_file "$workspace_path_bash" 2>/dev/null || true)"
+    fi
+
+    api_key="${MCPSERVER_API_KEY:-$(_repl_compat_marker_field "$marker_file" "apiKey" "")}"
+    [ -z "$workspace_path" ] && workspace_path="${MCPSERVER_WORKSPACE_PATH:-$(_repl_compat_marker_field "$marker_file" "workspacePath" "")}"
+    [ -z "$base_url" ] && base_url="$(_repl_compat_marker_field "$marker_file" "baseUrl" "")"
+    [ -z "$api_key" ] && return 1
+    [ -z "$workspace_path" ] && return 1
+    [ -z "$base_url" ] && return 1
+
+    kind="$(_repl_unquote "$(_repl_yaml_get "$params_yaml" "kind")")"
+    id="$(_repl_unquote "$(_repl_yaml_get "$params_yaml" "id")")"
+    todo_id="$(_repl_unquote "$(_repl_yaml_get "$params_yaml" "todoId")")"
+    [ -z "$kind" ] && return 1
+    [ -z "$id" ] && return 1
+    [ -z "$todo_id" ] && return 1
+
+    case "$kind" in
+        fr|functional) kind="fr" ;;
+        tr|technical) kind="tr" ;;
+        test|testing) kind="test" ;;
+        *) return 1 ;;
+    esac
+
+    route="mcpserver/requirements/${kind}/$(_repl_url_path_segment "$id")/acceptance-criteria/copy-from-todo"
+    body="$(printf '{"todoId":"%s"}' "$(_repl_json_escape "$todo_id")")"
+
+    local tmp_body tmp_headers curl_status content_type
+    mkdir -p "$REPL_INVOKE_CACHE_DIR"
+    tmp_body="${REPL_INVOKE_CACHE_DIR}/requirements-copy-ac.$$.$RANDOM.body"
+    tmp_headers="${REPL_INVOKE_CACHE_DIR}/requirements-copy-ac.$$.$RANDOM.headers"
+
+    curl -fsSL \
+        -D "$tmp_headers" \
+        -o "$tmp_body" \
+        -X POST \
+        -H "X-Api-Key: ${api_key}" \
+        -H "X-Workspace-Path: ${workspace_path}" \
+        -H "Content-Type: application/json" \
+        --data-binary "$body" \
+        "${base_url%/}/${route}" >/dev/null 2>&1
+    curl_status=$?
+    if [ $curl_status -ne 0 ]; then
+        rm -f "$tmp_body" "$tmp_headers"
+        return $curl_status
+    fi
+
+    content_type="$(grep -i '^content-type:' "$tmp_headers" 2>/dev/null | head -1 | sed 's/^[Cc]ontent-[Tt]ype:[[:space:]]*//' | tr -d '\r')"
+    content_type="${content_type%%;*}"
+    [ -z "$content_type" ] && content_type="application/json"
+    printf 'type: result\npayload:\n'
+    printf '  result: |\n'
+    sed 's/^/    /' "$tmp_body"
+    printf '\n'
+    printf '  contentType: %s\n' "$content_type"
+    rm -f "$tmp_body" "$tmp_headers"
+}
+
 _repl_todo_json_body() {
     local operation="$1"
     local params_yaml="${2:-}"
@@ -2604,6 +2723,29 @@ _repl_workflow_requirements() {
     local workflow_params typed_method typed_params response status created_response
     local failsafe_file=""
     local typed_tried=0
+
+    if [ "$operation" = "copyAcceptanceCriteriaFromTodo" ]; then
+        _repl_requirements_bootstrap_state "$params_yaml" || return 1
+        failsafe_file="$(_repl_failsafe_write "$method" "$params_yaml" "requirements_${operation}")"
+        response="$(_repl_requirements_copy_acceptance_http_fallback "$params_yaml" 2>&1)"
+        status=$?
+        if [ $status -eq 0 ] && _repl_response_is_nonempty_success "$response"; then
+            _repl_failsafe_clear "$failsafe_file"
+            printf '%s\n' "$response"
+            return 0
+        fi
+
+        response="$(_repl_invoke_raw_in_workspace "$method" "$params_yaml" "compat" 2>&1)"
+        status=$?
+        if [ $status -eq 0 ] && _repl_response_is_nonempty_success "$response"; then
+            _repl_failsafe_clear "$failsafe_file"
+            printf '%s\n' "$response"
+            return 0
+        fi
+
+        printf '%s\n' "$response"
+        return $status
+    fi
 
     _repl_requirements_typed_method "$operation" >/dev/null || {
         _repl_invoke_raw_in_workspace "$method" "$params_yaml"
@@ -3793,4 +3935,4 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     exit $?
 fi
 
-export -f repl_invoke repl_build_envelope _repl_bool_to_enabled _repl_compat_marker_endpoint_field _repl_compat_marker_field _repl_create_compat_marker _repl_failsafe_clear _repl_failsafe_dir _repl_failsafe_plugin_name _repl_failsafe_workspace_root _repl_failsafe_write _repl_first_param_text _repl_internal_todo_is_enabled _repl_internal_todo_mode_value _repl_internal_todo_state_file _repl_invoke_raw _repl_invoke_raw_in_workspace _repl_invoke_with_fallback _repl_bootstrap_state _repl_emit_response _repl_generate_session_id _repl_json_escape _repl_normalized_actions_block _repl_normalized_dialog_items_block _repl_param_text _repl_path_for_bash _repl_path_for_repl _repl_pending_import_file _repl_pending_import_todo_exists _repl_persist_turn _repl_requirements_bootstrap_state _repl_requirements_existing_for_update _repl_requirements_generate_http_fallback _repl_requirements_normalize_generate_response _repl_requirements_typed_doc_type _repl_requirements_typed_method _repl_requirements_typed_params _repl_requirements_update_get_method _repl_requirements_update_workflow_get_method _repl_requirements_workflow_doc_type _repl_requirements_workflow_params _repl_requirement_list_field _repl_response_has_empty_result _repl_response_is_error _repl_response_is_nonempty_success _repl_run_repl_with_timeout _repl_session_meta _repl_session_state_value _repl_sessionlog_import_recovery_http_fallback _repl_sessionlog_submit_http_fallback _repl_state_value _repl_submit_session _repl_todo_http_fallback _repl_todo_json_body _repl_turns_block _repl_url_path_segment _repl_turn_bump _repl_count_lines _repl_turn_has_audit_schema _repl_turn_audit_missing _repl_workflow_audit _repl_workflow_close_turn _repl_workflow_append_actions _repl_workflow_append_dialog _repl_workflow_begin_turn _repl_workflow_bootstrap _repl_workflow_complete_turn _repl_workflow_import_pending _repl_workflow_import_recovery _repl_workflow_open_session _repl_workflow_query_history _repl_workflow_requirements _repl_workflow_requirements_is_mutation _repl_workflow_requirements_prefers_typed _repl_workflow_todo _repl_workflow_todo_internal_tracking _repl_workflow_todo_is_mutation _repl_workflow_todo_select _repl_workflow_todo_update_selected _repl_workflow_update_turn _repl_yaml_block_get _repl_yaml_field _repl_yaml_get 2>/dev/null || true
+export -f repl_invoke repl_build_envelope _repl_bool_to_enabled _repl_compat_marker_endpoint_field _repl_compat_marker_field _repl_create_compat_marker _repl_failsafe_clear _repl_failsafe_dir _repl_failsafe_plugin_name _repl_failsafe_workspace_root _repl_failsafe_write _repl_first_param_text _repl_internal_todo_is_enabled _repl_internal_todo_mode_value _repl_internal_todo_state_file _repl_invoke_raw _repl_invoke_raw_in_workspace _repl_invoke_with_fallback _repl_bootstrap_state _repl_emit_response _repl_generate_session_id _repl_json_escape _repl_normalized_actions_block _repl_normalized_dialog_items_block _repl_param_text _repl_path_for_bash _repl_path_for_repl _repl_pending_import_file _repl_pending_import_todo_exists _repl_persist_turn _repl_requirements_bootstrap_state _repl_requirements_copy_acceptance_http_fallback _repl_requirements_existing_for_update _repl_requirements_generate_http_fallback _repl_requirements_normalize_generate_response _repl_requirements_typed_doc_type _repl_requirements_typed_method _repl_requirements_typed_params _repl_requirements_update_get_method _repl_requirements_update_workflow_get_method _repl_requirements_workflow_doc_type _repl_requirements_workflow_params _repl_requirement_list_field _repl_response_has_empty_result _repl_response_is_error _repl_response_is_nonempty_success _repl_run_repl_with_timeout _repl_session_meta _repl_session_state_value _repl_sessionlog_import_recovery_http_fallback _repl_sessionlog_submit_http_fallback _repl_state_value _repl_submit_session _repl_todo_http_fallback _repl_todo_json_body _repl_turns_block _repl_url_path_segment _repl_turn_bump _repl_count_lines _repl_turn_has_audit_schema _repl_turn_audit_missing _repl_workflow_audit _repl_workflow_close_turn _repl_workflow_append_actions _repl_workflow_append_dialog _repl_workflow_begin_turn _repl_workflow_bootstrap _repl_workflow_complete_turn _repl_workflow_import_pending _repl_workflow_import_recovery _repl_workflow_open_session _repl_workflow_query_history _repl_workflow_requirements _repl_workflow_requirements_is_mutation _repl_workflow_requirements_prefers_typed _repl_workflow_todo _repl_workflow_todo_internal_tracking _repl_workflow_todo_is_mutation _repl_workflow_todo_select _repl_workflow_todo_update_selected _repl_workflow_update_turn _repl_emit_acceptance_criteria_block _repl_emit_acceptance_criteria_hydrate _repl_yaml_block_get _repl_yaml_field _repl_yaml_get 2>/dev/null || true

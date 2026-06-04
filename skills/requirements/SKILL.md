@@ -110,6 +110,40 @@ payload:
 
 Required fields: `id`, `title`, `description`, `priority`, `area`. The `notes` field is optional.
 
+### Acceptance Criteria
+
+FR, TR, and TEST create/update commands accept structured `acceptanceCriteria` entries with the same shape used by TODO execution criteria:
+
+```yaml
+method: workflow.requirements.createFr
+params:
+  id: FR-MCP-XXX-001
+  title: Acceptance criteria example
+  description: Requirement records preserve structured pass/fail criteria.
+  priority: high
+  area: MCP
+  acceptanceCriteria:
+    - id: ac-1
+      text: Round-trip preserves criterion text
+      isSatisfied: false
+    - id: ac-2
+      text: Evidence is retained when supplied
+      isSatisfied: true
+      evidence: tests/Services/RequirementAcceptanceCriteriaTests.cs
+```
+
+To copy criteria from an execution TODO onto a requirement, call `workflow.requirements.copyAcceptanceCriteriaFromTodo`:
+
+```yaml
+method: workflow.requirements.copyAcceptanceCriteriaFromTodo
+params:
+  kind: fr
+  id: FR-MCP-XXX-001
+  todoId: PLAN-MCP-001
+```
+
+This maps to `POST /mcpserver/requirements/{kind}/{id}/acceptance-criteria/copy-from-todo` with body `{ "todoId": "PLAN-MCP-001" }`.
+
 ### Batch Create Or Update
 
 When creating or updating multiple records, prefer the atomic batch commands instead of Markdown ingestion. Batch commands accept YAML `records:` arrays and fail all records if any record is invalid, conflicts, or is missing during update.
