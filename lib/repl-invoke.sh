@@ -108,13 +108,79 @@ _repl_yaml_block_get() {
 _repl_list_block_get() {
     # _repl_list_block_get <yaml_text> <key>
     printf '%s\n' "$1" | awk -v key="$2" '
-        $0 ~ "^[[:space:]]*" key ":[[:space:]]*$" { capture = 1; next }
+        function indent(line) {
+            match(line, /^[[:space:]]*/)
+            return RLENGTH
+        }
+        $0 ~ "^[[:space:]]*" key ":[[:space:]]*$" {
+            capture = 1
+            key_indent = indent($0)
+            strip_indent = -1
+            next
+        }
         capture {
-            if ($0 ~ "^[^[:space:]]") {
+            if ($0 ~ "^[[:space:]]*$") {
+                print
+                next
+            }
+
+            line_indent = indent($0)
+            if (line_indent <= key_indent && $0 !~ "^[[:space:]]*-") {
                 exit
             }
-            sub(/^[[:space:]][[:space:]]/, "")
+
+            if (strip_indent < 0) {
+                strip_indent = line_indent
+            }
+
+            if (strip_indent > 0 && length($0) >= strip_indent) {
+                print substr($0, strip_indent + 1)
+            } else {
+                print
+            }
+        }
+    '
+}
+
+_repl_records_block_get() {
+    local params_yaml="$1"
+    local records_value records_block
+    records_value="$(_repl_yaml_get "$params_yaml" "records" 2>/dev/null || true)"
+    records_value="$(_repl_unquote "$records_value")"
+    if printf '%s' "$records_value" | grep -Eq '^\[[[:space:]]*\{'; then
+        printf '%s\n' "$records_value"
+        return 0
+    fi
+
+    records_block="$(_repl_list_block_get "$params_yaml" "records")"
+    _repl_records_block_normalize "$records_block"
+}
+
+_repl_records_block_normalize() {
+    printf '%s\n' "$1" | awk '
+        function indent(line) {
+            match(line, /^[[:space:]]*/)
+            return RLENGTH
+        }
+        {
+            line_indent = indent($0)
+            if (in_acceptance_criteria) {
+                if ($0 ~ "^[[:space:]]*$") {
+                    print
+                    next
+                }
+                if (line_indent > acceptance_criteria_indent || (line_indent == acceptance_criteria_indent && $0 ~ "^[[:space:]]*-")) {
+                    print "  " $0
+                    next
+                }
+                in_acceptance_criteria = 0
+            }
+
             print
+            if ($0 ~ "^[[:space:]]*acceptanceCriteria:[[:space:]]*$") {
+                in_acceptance_criteria = 1
+                acceptance_criteria_indent = line_indent
+            }
         }
     '
 }
@@ -168,14 +234,11 @@ _repl_schema_require_any_text() {
 
 _repl_schema_has_records() {
     local params_yaml="$1"
-    local records_block records_value
-    records_block="$(_repl_list_block_get "$params_yaml" "records" 2>/dev/null || true)"
-    if [ -n "$records_block" ] && printf '%s\n' "$records_block" | grep -q '^[[:space:]]*-' ; then
+    local records_block
+    records_block="$(_repl_records_block_get "$params_yaml" 2>/dev/null || true)"
+    if [ -n "$records_block" ] && printf '%s\n' "$records_block" | grep -Eq '^[[:space:]]*-|^\[[[:space:]]*\{' ; then
         return 0
     fi
-    records_value="$(_repl_yaml_get "$params_yaml" "records" 2>/dev/null || true)"
-    records_value="$(_repl_unquote "$records_value")"
-    printf '%s' "$records_value" | grep -Eq '^\[[[:space:]]*\{' && return 0
     return 1
 }
 
@@ -1504,11 +1567,15 @@ _repl_requirements_typed_params() {
             return 0
             ;;
         createFrBatch|updateFrBatch|createTrBatch|updateTrBatch|createTestBatch|updateTestBatch|createBatch|updateBatch)
-            records_block="$(_repl_list_block_get "$params_yaml" "records")"
+            records_block="$(_repl_records_block_get "$params_yaml")"
             printf 'request:\n'
             if [ -n "$records_block" ]; then
-                printf '  records:\n'
-                printf '%s\n' "$records_block" | sed 's/^/    /'
+                if printf '%s' "$records_block" | grep -Eq '^\[[[:space:]]*\{'; then
+                    printf '  records: %s\n' "$records_block"
+                else
+                    printf '  records:\n'
+                    printf '%s\n' "$records_block" | sed 's/^/    /'
+                fi
             else
                 printf '  records: []\n'
             fi
@@ -3935,4 +4002,4 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     exit $?
 fi
 
-export -f repl_invoke repl_build_envelope _repl_bool_to_enabled _repl_compat_marker_endpoint_field _repl_compat_marker_field _repl_create_compat_marker _repl_failsafe_clear _repl_failsafe_dir _repl_failsafe_plugin_name _repl_failsafe_workspace_root _repl_failsafe_write _repl_first_param_text _repl_internal_todo_is_enabled _repl_internal_todo_mode_value _repl_internal_todo_state_file _repl_invoke_raw _repl_invoke_raw_in_workspace _repl_invoke_with_fallback _repl_bootstrap_state _repl_emit_response _repl_generate_session_id _repl_json_escape _repl_normalized_actions_block _repl_normalized_dialog_items_block _repl_param_text _repl_path_for_bash _repl_path_for_repl _repl_pending_import_file _repl_pending_import_todo_exists _repl_persist_turn _repl_requirements_bootstrap_state _repl_requirements_copy_acceptance_http_fallback _repl_requirements_existing_for_update _repl_requirements_generate_http_fallback _repl_requirements_normalize_generate_response _repl_requirements_typed_doc_type _repl_requirements_typed_method _repl_requirements_typed_params _repl_requirements_update_get_method _repl_requirements_update_workflow_get_method _repl_requirements_workflow_doc_type _repl_requirements_workflow_params _repl_requirement_list_field _repl_response_has_empty_result _repl_response_is_error _repl_response_is_nonempty_success _repl_run_repl_with_timeout _repl_session_meta _repl_session_state_value _repl_sessionlog_import_recovery_http_fallback _repl_sessionlog_submit_http_fallback _repl_state_value _repl_submit_session _repl_todo_http_fallback _repl_todo_json_body _repl_turns_block _repl_url_path_segment _repl_turn_bump _repl_count_lines _repl_turn_has_audit_schema _repl_turn_audit_missing _repl_workflow_audit _repl_workflow_close_turn _repl_workflow_append_actions _repl_workflow_append_dialog _repl_workflow_begin_turn _repl_workflow_bootstrap _repl_workflow_complete_turn _repl_workflow_import_pending _repl_workflow_import_recovery _repl_workflow_open_session _repl_workflow_query_history _repl_workflow_requirements _repl_workflow_requirements_is_mutation _repl_workflow_requirements_prefers_typed _repl_workflow_todo _repl_workflow_todo_internal_tracking _repl_workflow_todo_is_mutation _repl_workflow_todo_select _repl_workflow_todo_update_selected _repl_workflow_update_turn _repl_emit_acceptance_criteria_block _repl_emit_acceptance_criteria_hydrate _repl_yaml_block_get _repl_yaml_field _repl_yaml_get 2>/dev/null || true
+export -f repl_invoke repl_build_envelope _repl_bool_to_enabled _repl_compat_marker_endpoint_field _repl_compat_marker_field _repl_create_compat_marker _repl_failsafe_clear _repl_failsafe_dir _repl_failsafe_plugin_name _repl_failsafe_workspace_root _repl_failsafe_write _repl_first_param_text _repl_internal_todo_is_enabled _repl_internal_todo_mode_value _repl_internal_todo_state_file _repl_invoke_raw _repl_invoke_raw_in_workspace _repl_invoke_with_fallback _repl_bootstrap_state _repl_emit_response _repl_generate_session_id _repl_json_escape _repl_normalized_actions_block _repl_normalized_dialog_items_block _repl_param_text _repl_path_for_bash _repl_path_for_repl _repl_pending_import_file _repl_pending_import_todo_exists _repl_persist_turn _repl_records_block_get _repl_records_block_normalize _repl_requirements_bootstrap_state _repl_requirements_copy_acceptance_http_fallback _repl_requirements_existing_for_update _repl_requirements_generate_http_fallback _repl_requirements_normalize_generate_response _repl_requirements_typed_doc_type _repl_requirements_typed_method _repl_requirements_typed_params _repl_requirements_update_get_method _repl_requirements_update_workflow_get_method _repl_requirements_workflow_doc_type _repl_requirements_workflow_params _repl_requirement_list_field _repl_response_has_empty_result _repl_response_is_error _repl_response_is_nonempty_success _repl_run_repl_with_timeout _repl_session_meta _repl_session_state_value _repl_sessionlog_import_recovery_http_fallback _repl_sessionlog_submit_http_fallback _repl_state_value _repl_submit_session _repl_todo_http_fallback _repl_todo_json_body _repl_turns_block _repl_url_path_segment _repl_turn_bump _repl_count_lines _repl_turn_has_audit_schema _repl_turn_audit_missing _repl_workflow_audit _repl_workflow_close_turn _repl_workflow_append_actions _repl_workflow_append_dialog _repl_workflow_begin_turn _repl_workflow_bootstrap _repl_workflow_complete_turn _repl_workflow_import_pending _repl_workflow_import_recovery _repl_workflow_open_session _repl_workflow_query_history _repl_workflow_requirements _repl_workflow_requirements_is_mutation _repl_workflow_requirements_prefers_typed _repl_workflow_todo _repl_workflow_todo_internal_tracking _repl_workflow_todo_is_mutation _repl_workflow_todo_select _repl_workflow_todo_update_selected _repl_workflow_update_turn _repl_emit_acceptance_criteria_block _repl_emit_acceptance_criteria_hydrate _repl_yaml_block_get _repl_yaml_field _repl_yaml_get 2>/dev/null || true
