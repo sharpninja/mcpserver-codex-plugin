@@ -11,6 +11,13 @@ prefer `bash ${CODEX_PLUGIN_ROOT}/lib/session-start.sh <workspace-path>`.
 If you bypass the wrapper for diagnostics and write to `mcpserver-repl --agent-stdio`
 directly, send one single-line JSON request envelope per stdin message.
 
+`workflow.sessionlog.*` is a Codex plugin workflow/REPL namespace, not a
+literal native MCP tool namespace. Native McpServer `/mcp-transport` discovery
+uses names such as `sessionlog_*`, `todo_*`, and `requirements_*`;
+hosted-agent adapters may expose `mcp_session_*` aliases. Do not call this
+plugin unavailable solely because `workflow.*` names are absent from generic MCP
+discovery.
+
 Before using any workflow commands, call `workflow.sessionlog.bootstrap` through
 the wrapper to initialize the session log subsystem:
 
