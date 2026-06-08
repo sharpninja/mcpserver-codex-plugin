@@ -70,6 +70,21 @@ if (typeof value === "string" || typeof value === "number" || typeof value === "
     printf '%s\n' "$text" | grep "^[[:space:]]*$key:" | head -1 | sed "s/^[[:space:]]*$key:[[:space:]]*//"
 }
 
+_repl_yaml_get_root() {
+    # _repl_yaml_get_root <yaml_text> <key>
+    # Reads only root-level YAML scalar fields. This intentionally excludes
+    # nested fields such as implementationTasks[].done from parent TODO fields.
+    local text="$1"
+    local key="$2"
+    printf '%s\n' "$text" | awk -v key="$key" '
+        $0 ~ "^" key ":[[:space:]]*" {
+            sub("^" key ":[[:space:]]*", "")
+            print
+            exit
+        }
+    '
+}
+
 _repl_yaml_block_get() {
     # _repl_yaml_block_get <yaml_text> <key>
     printf '%s\n' "$1" | awk -v key="$2" '
@@ -2358,7 +2373,7 @@ process.stdout.write(JSON.stringify(body));
 
     _repl_todo_json_add_bool() {
         local key="$1" normalized
-        value="$(_repl_yaml_get "$params_yaml" "$key" 2>/dev/null || true)"
+        value="$(_repl_yaml_get_root "$params_yaml" "$key" 2>/dev/null || true)"
         [ -z "$value" ] && return 0
         value="$(_repl_unquote "$value")"
         normalized="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')"

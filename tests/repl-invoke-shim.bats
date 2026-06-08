@@ -803,6 +803,27 @@ implementationTasks:
     ! printf '%s\n' "$body" | grep -q '>-'
 }
 
+@test "TODO HTTP body does not promote implementation task done to parent done" {
+    command -v node >/dev/null 2>&1 || skip "node not available"
+    write_requirements_state
+    source "$LIB"
+
+    body="$(_repl_todo_json_body "update" "implementationTasks:
+  - task: Complete the focused regression
+    done: true
+  - task: Keep parent TODO open
+    done: false")"
+
+    printf '%s\n' "$body" | node -e '
+const fs = require("fs");
+const body = JSON.parse(fs.readFileSync(0, "utf8"));
+if (Object.prototype.hasOwnProperty.call(body, "done")) process.exit(1);
+if (!Array.isArray(body.implementationTasks)) process.exit(2);
+if (body.implementationTasks[0].done !== true) process.exit(3);
+if (body.implementationTasks[1].done !== false) process.exit(4);
+'
+}
+
 @test "TODO HTTP body accepts JSON request wrapper because JSON is YAML" {
     command -v node >/dev/null 2>&1 || skip "node not available"
     write_requirements_state
