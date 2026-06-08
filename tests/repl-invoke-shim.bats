@@ -129,6 +129,11 @@ case "$method" in
     workflow.memory.list)
         printf 'type: result\npayload:\n  result:\n    items:\n      - id: MEMORY-REQ-001\n        text: Keep exact wording.\n    totalCount: 1\n'
         ;;
+    workflow.memory.add|workflow.memory.update|workflow.memory.remove)
+        id="$(extract_yaml_value id)"
+        [ -z "$id" ] && id="MEMORY-REQ-001"
+        printf 'type: result\npayload:\n  result:\n    success: true\n    id: %s\n' "$id"
+        ;;
     workflow.sessionlog.*|workflow.requirements.*)
         printf 'type: error\npayload:\n  code: method_not_found\n  message: not routed\n'
         ;;
@@ -961,6 +966,24 @@ priority: medium"
     [ "$status" -eq 0 ]
     grep -q "MEMORY-REQ-001" <<<"$output"
     grep -q "method=workflow.memory.list" "$STUB_LOG"
+}
+
+@test "workflow.memory.add appends audit action and clears failsafe after success" {
+    source "$LIB"
+    _repl_workflow_append_actions() {
+        printf '%s\n' "$1" >> "$SANDBOX/memory-actions.log"
+    }
+
+    run repl_invoke "workflow.memory.add" "id: MEMORY-REQ-001
+category: REQ
+text: Keep exact wording.
+scope: Workspace
+updatedBy: Codex"
+
+    [ "$status" -eq 0 ]
+    grep -q "method=workflow.memory.add" "$STUB_LOG"
+    grep -q "Memory add MEMORY-REQ-001" "$SANDBOX/memory-actions.log"
+    [ "$(find "$SANDBOX" -path '*/failsafe/*' -type f | wc -l | tr -d ' ')" = "0" ]
 }
 
 @test "workflow.requirements.listFr falls back to typed client instead of method_not_found" {
