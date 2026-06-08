@@ -25,6 +25,20 @@ EOF
 
     cat > "$SANDBOX/bin/mcpserver-repl" <<'EOF'
 #!/usr/bin/env bash
+payload="$(cat)"
+if grep -q 'workflow.memory.list' <<<"$payload"; then
+cat <<'YAML'
+type: result
+payload:
+  result:
+    items:
+    - id: MEMORY-REQ-001
+      text: Keep exact wording.
+    - id: MEMORY-USER-002
+      text: Preserve workspace preference.
+YAML
+exit 0
+fi
 printf 'type: response\npayload:\n  ok: true\n'
 EOF
     chmod +x "$SANDBOX/bin/mcpserver-repl"
@@ -66,6 +80,9 @@ import sys
 doc = json.loads(sys.argv[1])
 context = doc["hookSpecificOutput"]["additionalContext"]
 assert "Prefer session/task state and recent checkpoints" in context
+assert "REQUIRED MEMORIES" in context
+assert "- MEMORY-REQ-001: Keep exact wording." in context
+assert "- MEMORY-USER-002: Preserve workspace preference." in context
 assert "Use TODO and requirements tools only as needed." in context
 assert "adb_step for screenshot -> inspect -> act -> screenshot loops." in context
 assert "Run code-verify.sh after source edits and stop-gate.sh before the final response." in context
@@ -76,6 +93,9 @@ PY
 const doc = JSON.parse(process.argv[1]);
 const context = doc.hookSpecificOutput.additionalContext;
 if (!context.includes("Prefer session/task state and recent checkpoints")) process.exit(1);
+if (!context.includes("REQUIRED MEMORIES")) process.exit(1);
+if (!context.includes("- MEMORY-REQ-001: Keep exact wording.")) process.exit(1);
+if (!context.includes("- MEMORY-USER-002: Preserve workspace preference.")) process.exit(1);
 if (!context.includes("Use TODO and requirements tools only as needed.")) process.exit(1);
 if (!context.includes("adb_step for screenshot -> inspect -> act -> screenshot loops.")) process.exit(1);
 if (!context.includes("Run code-verify.sh after source edits and stop-gate.sh before the final response.")) process.exit(1);

@@ -126,6 +126,9 @@ case "$method" in
     workflow.sessionlog.importRecovery)
         printf 'type: result\npayload:\n  result:\n    importedTurns: 1\n    totalTurns: 1\n'
         ;;
+    workflow.memory.list)
+        printf 'type: result\npayload:\n  result:\n    items:\n      - id: MEMORY-REQ-001\n        text: Keep exact wording.\n    totalCount: 1\n'
+        ;;
     workflow.sessionlog.*|workflow.requirements.*)
         printf 'type: error\npayload:\n  code: method_not_found\n  message: not routed\n'
         ;;
@@ -940,6 +943,16 @@ priority: medium"
     export PATH="$PATH_BACKUP"
     [ "$status" -eq 0 ]
     [ "$(read_status)" = "completed" ]
+}
+
+@test "workflow.memory.list is routed through the memory workflow shim" {
+    source "$LIB"
+
+    run repl_invoke "workflow.memory.list" "scope: Effective"
+
+    [ "$status" -eq 0 ]
+    grep -q "MEMORY-REQ-001" <<<"$output"
+    grep -q "method=workflow.memory.list" "$STUB_LOG"
 }
 
 @test "workflow.requirements.listFr falls back to typed client instead of method_not_found" {

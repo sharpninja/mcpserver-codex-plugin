@@ -51,6 +51,10 @@ if ! type repl_invoke >/dev/null 2>&1; then
     # shellcheck source=../../lib/repl-invoke.sh
     source "$CODEX_PLUGIN_ROOT/lib/repl-invoke.sh" 2>/dev/null || true
 fi
+if ! type mcp_required_memory_context >/dev/null 2>&1; then
+    # shellcheck source=./memory-context.sh
+    source "$CODEX_PLUGIN_ROOT/lib/memory-context.sh" 2>/dev/null || true
+fi
 
 # Read stdin into PAYLOAD (may be empty)
 PAYLOAD="$(cat 2>/dev/null || true)"
@@ -156,11 +160,18 @@ INTERNAL_TODO_REMINDER="Use TODO and requirements tools only as needed."
 if type _repl_internal_todo_is_enabled >/dev/null 2>&1 && _repl_internal_todo_is_enabled; then
     INTERNAL_TODO_REMINDER="MCP-backed Codex internal TODO tracking is enabled. Mirror durable plan items through workflow.todo.* and keep only transient execution details in Codex's local checklist."
 fi
+if type mcp_required_memory_context >/dev/null 2>&1; then
+    REQUIRED_MEMORY_CONTEXT="$(mcp_required_memory_context)"
+else
+    REQUIRED_MEMORY_CONTEXT="$(printf 'REQUIRED MEMORIES\n- None.\n')"
+fi
 
 # Inject a per-turn reminder into the agent's context so it sees the
 # exact contract that applies to this turn. Prioritize MCP continuity and
 # attached-device guidance first; keep verification reminders secondary.
 REMINDER="$(cat <<EOF
+${REQUIRED_MEMORY_CONTEXT}
+
 A session log turn is active. Use McpServer as the default source of task continuity:
 1. Prefer session/task state and recent checkpoints over asking the user for context.
 2. ${INTERNAL_TODO_REMINDER}

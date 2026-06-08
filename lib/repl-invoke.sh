@@ -307,6 +307,16 @@ _repl_schema_validate_method() {
         workflow.todo.update|client.Todo.UpdateAsync)
             _repl_schema_require_text "$method" "$params_yaml" "id" || return 1
             ;;
+        workflow.memory.get|workflow.memory.remove)
+            _repl_schema_require_text "$method" "$params_yaml" "id" || return 1
+            ;;
+        workflow.memory.add)
+            _repl_schema_require_text "$method" "$params_yaml" "category" || return 1
+            _repl_schema_require_text "$method" "$params_yaml" "text" || return 1
+            ;;
+        workflow.memory.update)
+            _repl_schema_require_text "$method" "$params_yaml" "id" || return 1
+            ;;
         workflow.requirements.getFr|workflow.requirements.deleteFr|workflow.requirements.getTr|workflow.requirements.deleteTr|workflow.requirements.getTest|workflow.requirements.deleteTest|client.Requirements.GetFrAsync|client.Requirements.DeleteFrAsync|client.Requirements.GetTrAsync|client.Requirements.DeleteTrAsync|client.Requirements.GetTestAsync|client.Requirements.DeleteTestAsync)
             _repl_schema_require_text "$method" "$params_yaml" "id" || return 1
             ;;
@@ -622,6 +632,44 @@ _repl_workflow_todo_is_mutation() {
         create|update|delete) return 0 ;;
         *) return 1 ;;
     esac
+}
+
+_repl_workflow_memory() {
+    local method="$1"
+    local params_yaml="${2:-}"
+    local response status original_timeout memory_timeout
+
+    original_timeout="${REPL_TIMEOUT:-}"
+    memory_timeout="${REPL_MEMORY_REPL_TIMEOUT:-8}"
+    export REPL_TIMEOUT="$memory_timeout"
+
+    response="$(_repl_invoke_raw_in_workspace "$method" "$params_yaml" "compat" 2>&1)"
+    status=$?
+    if [ -n "$original_timeout" ]; then export REPL_TIMEOUT="$original_timeout"; else unset REPL_TIMEOUT; fi
+    if [ $status -eq 0 ] && _repl_response_is_nonempty_success "$response"; then
+        printf '%s\n' "$response"
+        return 0
+    fi
+
+    original_timeout="${REPL_TIMEOUT:-}"
+    export REPL_TIMEOUT="$memory_timeout"
+    response="$(_repl_invoke_raw_in_workspace "$method" "$params_yaml" 2>&1)"
+    status=$?
+    if [ -n "$original_timeout" ]; then export REPL_TIMEOUT="$original_timeout"; else unset REPL_TIMEOUT; fi
+
+    if [ $status -eq 0 ] && _repl_response_is_nonempty_success "$response"; then
+        printf '%s\n' "$response"
+        return 0
+    fi
+
+    original_timeout="${REPL_TIMEOUT:-}"
+    export REPL_TIMEOUT="$memory_timeout"
+    response="$(_repl_invoke_raw "$method" "$params_yaml" 2>&1)"
+    status=$?
+    if [ -n "$original_timeout" ]; then export REPL_TIMEOUT="$original_timeout"; else unset REPL_TIMEOUT; fi
+
+    printf '%s\n' "$response"
+    return $status
 }
 
 _repl_bool_to_enabled() {
@@ -3947,6 +3995,10 @@ repl_invoke() {
             _repl_workflow_todo "$method" "$params_yaml"
             return $?
             ;;
+        workflow.memory.list|workflow.memory.get|workflow.memory.add|workflow.memory.update|workflow.memory.remove)
+            _repl_workflow_memory "$method" "$params_yaml"
+            return $?
+            ;;
         todo.query|todo.get|todo.create|todo.update|todo.delete)
             _repl_workflow_todo "workflow.${method}" "$params_yaml"
             return $?
@@ -4017,4 +4069,4 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     exit $?
 fi
 
-export -f repl_invoke repl_build_envelope _repl_bool_to_enabled _repl_compat_marker_endpoint_field _repl_compat_marker_field _repl_create_compat_marker _repl_failsafe_clear _repl_failsafe_dir _repl_failsafe_plugin_name _repl_failsafe_workspace_root _repl_failsafe_write _repl_first_param_text _repl_internal_todo_is_enabled _repl_internal_todo_mode_value _repl_internal_todo_state_file _repl_invoke_raw _repl_invoke_raw_in_workspace _repl_invoke_with_fallback _repl_bootstrap_state _repl_emit_response _repl_generate_session_id _repl_json_escape _repl_normalized_actions_block _repl_normalized_dialog_items_block _repl_param_text _repl_path_for_bash _repl_path_for_repl _repl_pending_import_file _repl_pending_import_todo_exists _repl_persist_turn _repl_records_block_get _repl_records_block_normalize _repl_requirements_bootstrap_state _repl_requirements_copy_acceptance_http_fallback _repl_requirements_existing_for_update _repl_requirements_generate_http_fallback _repl_requirements_normalize_generate_response _repl_requirements_typed_doc_type _repl_requirements_typed_method _repl_requirements_typed_params _repl_requirements_update_get_method _repl_requirements_update_workflow_get_method _repl_requirements_workflow_doc_type _repl_requirements_workflow_params _repl_requirement_list_field _repl_response_has_empty_result _repl_response_is_error _repl_response_is_nonempty_success _repl_run_repl_with_timeout _repl_session_meta _repl_session_state_value _repl_sessionlog_import_recovery_http_fallback _repl_sessionlog_submit_http_fallback _repl_state_value _repl_submit_session _repl_todo_http_fallback _repl_todo_json_body _repl_turns_block _repl_url_path_segment _repl_turn_bump _repl_count_lines _repl_turn_has_audit_schema _repl_turn_audit_missing _repl_workflow_audit _repl_workflow_close_turn _repl_workflow_append_actions _repl_workflow_append_dialog _repl_workflow_begin_turn _repl_workflow_bootstrap _repl_workflow_complete_turn _repl_workflow_import_pending _repl_workflow_import_recovery _repl_workflow_open_session _repl_workflow_query_history _repl_workflow_requirements _repl_workflow_requirements_is_mutation _repl_workflow_requirements_prefers_typed _repl_workflow_todo _repl_workflow_todo_internal_tracking _repl_workflow_todo_is_mutation _repl_workflow_todo_select _repl_workflow_todo_update_selected _repl_workflow_update_turn _repl_emit_acceptance_criteria_block _repl_emit_acceptance_criteria_hydrate _repl_yaml_block_get _repl_yaml_field _repl_yaml_get 2>/dev/null || true
+export -f repl_invoke repl_build_envelope _repl_bool_to_enabled _repl_compat_marker_endpoint_field _repl_compat_marker_field _repl_create_compat_marker _repl_failsafe_clear _repl_failsafe_dir _repl_failsafe_plugin_name _repl_failsafe_workspace_root _repl_failsafe_write _repl_first_param_text _repl_internal_todo_is_enabled _repl_internal_todo_mode_value _repl_internal_todo_state_file _repl_invoke_raw _repl_invoke_raw_in_workspace _repl_invoke_with_fallback _repl_bootstrap_state _repl_emit_response _repl_generate_session_id _repl_json_escape _repl_normalized_actions_block _repl_normalized_dialog_items_block _repl_param_text _repl_path_for_bash _repl_path_for_repl _repl_pending_import_file _repl_pending_import_todo_exists _repl_persist_turn _repl_records_block_get _repl_records_block_normalize _repl_requirements_bootstrap_state _repl_requirements_copy_acceptance_http_fallback _repl_requirements_existing_for_update _repl_requirements_generate_http_fallback _repl_requirements_normalize_generate_response _repl_requirements_typed_doc_type _repl_requirements_typed_method _repl_requirements_typed_params _repl_requirements_update_get_method _repl_requirements_update_workflow_get_method _repl_requirements_workflow_doc_type _repl_requirements_workflow_params _repl_requirement_list_field _repl_response_has_empty_result _repl_response_is_error _repl_response_is_nonempty_success _repl_run_repl_with_timeout _repl_session_meta _repl_session_state_value _repl_sessionlog_import_recovery_http_fallback _repl_sessionlog_submit_http_fallback _repl_state_value _repl_submit_session _repl_todo_http_fallback _repl_todo_json_body _repl_turns_block _repl_url_path_segment _repl_turn_bump _repl_count_lines _repl_turn_has_audit_schema _repl_turn_audit_missing _repl_workflow_audit _repl_workflow_close_turn _repl_workflow_append_actions _repl_workflow_append_dialog _repl_workflow_begin_turn _repl_workflow_bootstrap _repl_workflow_complete_turn _repl_workflow_import_pending _repl_workflow_import_recovery _repl_workflow_memory _repl_workflow_open_session _repl_workflow_query_history _repl_workflow_requirements _repl_workflow_requirements_is_mutation _repl_workflow_requirements_prefers_typed _repl_workflow_todo _repl_workflow_todo_internal_tracking _repl_workflow_todo_is_mutation _repl_workflow_todo_select _repl_workflow_todo_update_selected _repl_workflow_update_turn _repl_emit_acceptance_criteria_block _repl_emit_acceptance_criteria_hydrate _repl_yaml_block_get _repl_yaml_field _repl_yaml_get 2>/dev/null || true
