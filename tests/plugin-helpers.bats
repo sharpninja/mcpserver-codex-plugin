@@ -6,6 +6,14 @@ source "$PLUGIN_ROOT/tests/cache-scope-helper.bash"
 to_host_path() {
     if command -v cygpath >/dev/null 2>&1; then
         cygpath -w "$1"
+    elif [[ "$1" =~ ^/mnt/([A-Za-z])/(.*)$ ]]; then
+        drive="$(printf '%s' "${BASH_REMATCH[1]}" | tr '[:lower:]' '[:upper:]')"
+        tail="${BASH_REMATCH[2]//\//\\}"
+        printf '%s:\\%s' "$drive" "$tail"
+    elif [[ "$1" =~ ^/([A-Za-z])/(.*)$ ]]; then
+        drive="$(printf '%s' "${BASH_REMATCH[1]}" | tr '[:lower:]' '[:upper:]')"
+        tail="${BASH_REMATCH[2]//\//\\}"
+        printf '%s:\\%s' "$drive" "$tail"
     else
         printf '%s' "$1"
     fi
@@ -88,7 +96,8 @@ EOF
         -PluginRoot "$(to_host_path "$PLUGIN_ROOT")" \
         -CacheRoot "$(to_host_path "$SANDBOX")" \
         -WorkspacePath "$(to_host_path "$TEST_WORKSPACE")" \
-        -BashPath "$(to_host_path "$BASH")"
+        -BashPath "$(to_host_path "$BASH")" \
+        -TimeoutSeconds 30
 
     [ "$status" -eq 0 ]
     grep -Fq 'keyword: $(cat /should-not-run)' "$STUB_LOG"
@@ -107,7 +116,8 @@ EOF
                 -PluginRoot "$3" \
                 -CacheRoot "$4" \
                 -WorkspacePath "$5" \
-                -BashPath "$6"
+                -BashPath "$6" \
+                -TimeoutSeconds 30
     ' _ \
         "$pwsh_bin" \
         "$(to_host_path "$PLUGIN_ROOT/Invoke-CodexMcpPlugin.ps1")" \
@@ -130,9 +140,66 @@ EOF
         -Command Status \
         -PluginRoot "$(to_host_path "$PLUGIN_ROOT")" \
         -CacheRoot "$(to_host_path "$SANDBOX")" \
-        -WorkspacePath "$(to_host_path "$TEST_WORKSPACE")"
+        -WorkspacePath "$(to_host_path "$TEST_WORKSPACE")" \
+        -TimeoutSeconds 30
 
     [ "$status" -eq 0 ]
     grep -Fq "mcp.codex.status:" <<<"$output"
     grep -Fq "turnRequestId: 'req-helper-001'" <<<"$output"
+}
+
+@test "PowerShell wrapper times out hung plugin command" {
+    write_turn_state
+    pwsh_bin="$(command -v pwsh.exe || command -v pwsh || true)"
+    [ -n "$pwsh_bin" ] || skip "pwsh is not available"
+
+    fake_plugin="$SANDBOX/fake-plugin"
+    mkdir -p "$fake_plugin/lib"
+    cat > "$fake_plugin/lib/mcp.codex.status.sh" <<'EOF'
+#!/usr/bin/env bash
+while true; do
+    read -t 1 _ || true
+done
+printf 'unreachable\n'
+EOF
+    chmod +x "$fake_plugin/lib/mcp.codex.status.sh"
+
+    run "$pwsh_bin" -NoLogo -NoProfile -File "$(to_host_path "$PLUGIN_ROOT/Invoke-CodexMcpPlugin.ps1")" \
+        -Command Status \
+        -PluginRoot "$(to_host_path "$fake_plugin")" \
+        -CacheRoot "$(to_host_path "$SANDBOX")" \
+        -WorkspacePath "$(to_host_path "$TEST_WORKSPACE")" \
+        -BashPath "$(to_host_path "$BASH")" \
+        -TimeoutSeconds 1
+
+    [ "$status" -ne 0 ]
+    grep -Fq "Plugin command timed out after 1 seconds" <<<"$output"
+}
+
+@test "PowerShell wrapper preserves stdout for failed plugin command" {
+    write_turn_state
+    pwsh_bin="$(command -v pwsh.exe || command -v pwsh || true)"
+    [ -n "$pwsh_bin" ] || skip "pwsh is not available"
+
+    fake_plugin="$SANDBOX/fake-plugin"
+    mkdir -p "$fake_plugin/lib"
+    cat > "$fake_plugin/lib/mcp.codex.status.sh" <<'EOF'
+#!/usr/bin/env bash
+printf 'type: error\npayload:\n  error: wrapped failure detail\n'
+exit 1
+EOF
+    chmod +x "$fake_plugin/lib/mcp.codex.status.sh"
+
+    run "$pwsh_bin" -NoLogo -NoProfile -File "$(to_host_path "$PLUGIN_ROOT/Invoke-CodexMcpPlugin.ps1")" \
+        -Command Status \
+        -PluginRoot "$(to_host_path "$fake_plugin")" \
+        -CacheRoot "$(to_host_path "$SANDBOX")" \
+        -WorkspacePath "$(to_host_path "$TEST_WORKSPACE")" \
+        -BashPath "$(to_host_path "$BASH")" \
+        -TimeoutSeconds 10
+
+    [ "$status" -ne 0 ]
+    grep -Fq "type: error" <<<"$output"
+    grep -Fq "wrapped failure detail" <<<"$output"
+    grep -Fq "Plugin command failed with exit code 1" <<<"$output"
 }

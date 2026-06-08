@@ -192,7 +192,15 @@ case "$method" in
         fi
         printf 'type: result\npayload:\n  result:\n    ok: true\n'
         ;;
-    client.Requirements.DeleteFrAsync|client.Requirements.DeleteTrAsync|client.Requirements.DeleteTestAsync|client.Requirements.ListTrAsync|client.Requirements.ListTestAsync|client.Requirements.ListMappingsAsync|client.Requirements.UpdateFrAsync|client.Requirements.UpdateTrAsync|client.Requirements.UpdateTestAsync|client.Requirements.UpsertMappingAsync|client.Requirements.DeleteMappingAsync|client.Requirements.IngestAsync)
+    client.Requirements.UpdateFrAsync)
+        if [ "${STUB_REQUIREMENTS_EMPTY_AC_RESPONSE:-}" = "1" ]; then
+            id="$(extract_yaml_value id)"
+            printf 'type: result\npayload:\n  result:\n    success: true\n    item:\n      id: %s\n      acceptanceCriteria: []\n' "$id"
+            exit 0
+        fi
+        printf 'type: result\npayload:\n  result:\n    ok: true\n'
+        ;;
+    client.Requirements.DeleteFrAsync|client.Requirements.DeleteTrAsync|client.Requirements.DeleteTestAsync|client.Requirements.ListTrAsync|client.Requirements.ListTestAsync|client.Requirements.ListMappingsAsync|client.Requirements.UpdateTrAsync|client.Requirements.UpdateTestAsync|client.Requirements.UpsertMappingAsync|client.Requirements.DeleteMappingAsync|client.Requirements.IngestAsync)
         printf 'type: result\npayload:\n  result:\n    ok: true\n'
         ;;
     *)
@@ -1200,6 +1208,59 @@ priority: high"
     grep -Eq "input:[[:space:]]+priority: high" "$STUB_LOG"
     grep -Eq "input:[[:space:]]+acceptanceCriteria:" "$STUB_LOG"
     grep -Eq "input:[[:space:]]+- id: existing-ac-1" "$STUB_LOG"
+}
+
+@test "workflow.requirements.updateFr typed params prefer caller acceptanceCriteria on criteria-only update" {
+    # FR-MCP-REQACPLUGIN-002: a criteria-only update must send the caller-supplied
+    # acceptanceCriteria block instead of hydrating an empty/stale existing list.
+    write_requirements_state
+    source "$LIB"
+
+    run repl_invoke "workflow.requirements.updateFr" "id: FR-MCP-AC-201
+acceptanceCriteria:
+  - id: caller-ac-1
+    text: caller criterion text
+    isSatisfied: false"
+
+    [ "$status" -eq 0 ]
+    grep -q "method=client.Requirements.UpdateFrAsync" "$STUB_LOG"
+    grep -Eq "input:[[:space:]]+acceptanceCriteria:" "$STUB_LOG"
+    grep -Eq "input:[[:space:]]+- id: caller-ac-1" "$STUB_LOG"
+    grep -Eq "input:[[:space:]]+text: caller criterion text" "$STUB_LOG"
+}
+
+@test "workflow.requirements.updateFr typed params preserve JSON acceptanceCriteria on criteria-only update" {
+    # FR-MCP-REQACPLUGIN-002: JSON params are accepted by the wrapper and must not
+    # bypass the acceptanceCriteria shaper/guard path.
+    write_requirements_state
+    source "$LIB"
+
+    run repl_invoke "workflow.requirements.updateFr" '{"id":"FR-MCP-AC-JSON","acceptanceCriteria":[{"id":"json-ac-1","text":"json criterion text","isSatisfied":false}]}'
+
+    [ "$status" -eq 0 ]
+    grep -q "method=client.Requirements.UpdateFrAsync" "$STUB_LOG"
+    grep -Eq "input:[[:space:]]+acceptanceCriteria:" "$STUB_LOG"
+    grep -Eq 'input:[[:space:]]+- id: "json-ac-1"' "$STUB_LOG"
+    grep -Eq 'input:[[:space:]]+text: "json criterion text"' "$STUB_LOG"
+}
+
+@test "workflow.requirements.updateFr fails when supplied acceptanceCriteria returns empty" {
+    # FR-MCP-REQACPLUGIN-002: do not report success when the server response proves
+    # that supplied structured criteria were not captured.
+    write_requirements_state
+    export STUB_REQUIREMENTS_EMPTY_AC_RESPONSE=1
+    source "$LIB"
+
+    run repl_invoke "workflow.requirements.updateFr" "id: FR-MCP-AC-202
+acceptanceCriteria:
+  - id: caller-ac-1
+    text: caller criterion text
+    isSatisfied: false"
+
+    unset STUB_REQUIREMENTS_EMPTY_AC_RESPONSE
+    [ "$status" -ne 0 ]
+    grep -q "requirements_acceptance_criteria_not_captured" <<<"$output"
+    grep -q "acceptanceCriteria was supplied" <<<"$output"
 }
 
 @test "workflow.requirements.copyAcceptanceCriteriaFromTodo wrapper hits copy endpoint" {

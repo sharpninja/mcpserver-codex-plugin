@@ -20,7 +20,9 @@ param(
 
     [string]$CacheRoot,
 
-    [string]$BashPath
+    [string]$BashPath,
+
+    [int]$TimeoutSeconds = 90
 )
 
 Set-StrictMode -Version Latest
@@ -125,15 +127,41 @@ function Invoke-BashPluginScript {
     }
     $process.StandardInput.Close()
 
-    $stdout = $process.StandardOutput.ReadToEnd()
-    $stderr = $process.StandardError.ReadToEnd()
+    $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+    $stderrTask = $process.StandardError.ReadToEndAsync()
+    $boundedTimeout = [Math]::Max(1, $TimeoutSeconds)
+    if (-not $process.WaitForExit($boundedTimeout * 1000)) {
+        try {
+            if ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) {
+                & "$env:WINDIR\System32\taskkill.exe" /PID $process.Id /T /F > $null 2> $null
+            } else {
+                $process.Kill($true)
+            }
+        } catch {
+            try { $process.Kill() } catch { }
+        }
+        try { $process.StandardOutput.Close() } catch { }
+        try { $process.StandardError.Close() } catch { }
+        try { [void]$process.WaitForExit(5000) } catch { }
+        try { [void]$stdoutTask.Wait(1000) } catch { }
+        try { [void]$stderrTask.Wait(1000) } catch { }
+
+        throw "Plugin command timed out after $boundedTimeout seconds: $ScriptPath"
+    }
+
     $process.WaitForExit()
+    $stdout = $stdoutTask.GetAwaiter().GetResult()
+    $stderr = $stderrTask.GetAwaiter().GetResult()
 
     if ($stderr.Length -gt 0) {
         [Console]::Error.Write($stderr)
     }
 
     if ($process.ExitCode -ne 0) {
+        if ($stdout.Length -gt 0) {
+            Write-Output ($stdout.TrimEnd("`r", "`n"))
+        }
+
         throw "Plugin command failed with exit code $($process.ExitCode)."
     }
 

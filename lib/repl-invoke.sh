@@ -157,6 +157,48 @@ _repl_list_block_get() {
     '
 }
 
+_repl_json_array_block_get() {
+    local text="$1"
+    local key="$2"
+    if ! printf '%s' "$text" | grep -q '^[[:space:]]*[{[]' || ! command -v node >/dev/null 2>&1; then
+        return 0
+    fi
+
+    printf '%s' "$text" | node -e '
+const fs = require("fs");
+const key = process.argv[1];
+const input = fs.readFileSync(0, "utf8").trim();
+if (!input) process.exit(0);
+let root;
+try { root = JSON.parse(input); } catch { process.exit(0); }
+let value = root && Object.prototype.hasOwnProperty.call(root, key) ? root[key] : undefined;
+if (value === undefined && root && root.request && typeof root.request === "object" && !Array.isArray(root.request) && Object.prototype.hasOwnProperty.call(root.request, key)) {
+  value = root.request[key];
+}
+if (!Array.isArray(value) || value.length === 0) process.exit(0);
+function scalar(value) {
+  if (value === null || value === undefined) return "null";
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return JSON.stringify(String(value));
+}
+for (const item of value) {
+  if (!item || typeof item !== "object" || Array.isArray(item)) {
+    console.log(`- ${scalar(item)}`);
+    continue;
+  }
+  const entries = Object.entries(item);
+  if (entries.length === 0) {
+    console.log("- {}");
+    continue;
+  }
+  entries.forEach(([entryKey, entryValue], index) => {
+    const rendered = entryValue && typeof entryValue === "object" ? JSON.stringify(entryValue) : scalar(entryValue);
+    console.log(`${index === 0 ? "- " : "  "}${entryKey}: ${rendered}`);
+  });
+}
+' "$key" 2>/dev/null || true
+}
+
 _repl_records_block_get() {
     local params_yaml="$1"
     local records_value records_block
@@ -1373,10 +1415,23 @@ _repl_emit_acceptance_criteria_block() {
     local source_yaml="$2"
     local block
     block="$(_repl_list_block_get "$source_yaml" "acceptanceCriteria" 2>/dev/null || true)"
+    if [ -z "$block" ]; then
+        block="$(_repl_json_array_block_get "$source_yaml" "acceptanceCriteria" 2>/dev/null || true)"
+    fi
     [ -z "$block" ] && return 0
     printf '%sacceptanceCriteria:\n' "$indent"
     printf '%s\n' "$block" | sed "s/^/${indent}  /"
     return 0
+}
+
+_repl_has_acceptance_criteria_block() {
+    local source_yaml="$1"
+    local block
+    block="$(_repl_list_block_get "$source_yaml" "acceptanceCriteria" 2>/dev/null || true)"
+    if [ -z "$block" ]; then
+        block="$(_repl_json_array_block_get "$source_yaml" "acceptanceCriteria" 2>/dev/null || true)"
+    fi
+    [ -n "$block" ]
 }
 
 # FR-MCP-REQACPLUGIN-001: hydration helper for partial updates. Emits acceptanceCriteria
@@ -1387,12 +1442,41 @@ _repl_emit_acceptance_criteria_hydrate() {
     local indent="$1"
     local params_yaml="$2"
     local existing_yaml="$3"
-    if printf '%s\n' "$params_yaml" | grep -qE '^[[:space:]]*acceptanceCriteria:[[:space:]]*$'; then
+    if _repl_has_acceptance_criteria_block "$params_yaml"; then
         _repl_emit_acceptance_criteria_block "$indent" "$params_yaml"
     elif [ -n "$existing_yaml" ]; then
         _repl_emit_acceptance_criteria_block "$indent" "$existing_yaml"
     fi
     return 0
+}
+
+_repl_requirements_acceptance_criteria_result_ok() {
+    local operation="$1"
+    local params_yaml="$2"
+    local response="$3"
+
+    case "$operation" in
+        createFr|updateFr|createTr|updateTr|createTest|updateTest)
+            ;;
+        *)
+            return 0
+            ;;
+    esac
+
+    if ! _repl_has_acceptance_criteria_block "$params_yaml"; then
+        return 0
+    fi
+
+    if ! printf '%s\n' "$response" | grep -qE '^[[:space:]]*acceptanceCriteria:[[:space:]]*\[[[:space:]]*\][[:space:]]*$'; then
+        return 0
+    fi
+
+    printf 'type: error\npayload:\n'
+    printf '  code: requirements_acceptance_criteria_not_captured\n'
+    printf '  message: acceptanceCriteria was supplied but the mutation response returned an empty acceptanceCriteria list.\n'
+    printf '  details:\n'
+    printf '    operation: %s\n' "$operation"
+    return 1
 }
 
 _repl_requirement_list_field() {
@@ -2895,6 +2979,7 @@ _repl_workflow_requirements() {
         response="$(_repl_invoke_raw_in_workspace "$typed_method" "$typed_params" "compat" 2>&1)"
         status=$?
         if [ $status -eq 0 ] && _repl_response_is_nonempty_success "$response"; then
+            _repl_requirements_acceptance_criteria_result_ok "$operation" "$params_yaml" "$response" || return 1
             _repl_failsafe_clear "$failsafe_file"
             printf '%s\n' "$response"
             return 0
@@ -2911,6 +2996,7 @@ _repl_workflow_requirements() {
         response="$(_repl_invoke_raw_in_workspace "$typed_method" "$typed_params" 2>&1)"
         status=$?
         if [ $status -eq 0 ] && _repl_response_is_nonempty_success "$response"; then
+            _repl_requirements_acceptance_criteria_result_ok "$operation" "$params_yaml" "$response" || return 1
             _repl_failsafe_clear "$failsafe_file"
             printf '%s\n' "$response"
             return 0
@@ -2935,6 +3021,7 @@ _repl_workflow_requirements() {
                 return 0
             fi
         else
+            _repl_requirements_acceptance_criteria_result_ok "$operation" "$params_yaml" "$response" || return 1
             _repl_failsafe_clear "$failsafe_file"
             printf '%s\n' "$response"
             return 0
@@ -2950,6 +3037,7 @@ _repl_workflow_requirements() {
                 return 0
             fi
         else
+            _repl_requirements_acceptance_criteria_result_ok "$operation" "$params_yaml" "$response" || return 1
             _repl_failsafe_clear "$failsafe_file"
             printf '%s\n' "$response"
             return 0
@@ -2966,6 +3054,7 @@ _repl_workflow_requirements() {
                     return 0
                 fi
             else
+                _repl_requirements_acceptance_criteria_result_ok "$operation" "$params_yaml" "$response" || return 1
                 _repl_failsafe_clear "$failsafe_file"
                 printf '%s\n' "$response"
                 return 0
@@ -2989,6 +3078,7 @@ _repl_workflow_requirements() {
                     return 0
                 fi
             else
+                _repl_requirements_acceptance_criteria_result_ok "$operation" "$params_yaml" "$response" || return 1
                 _repl_failsafe_clear "$failsafe_file"
                 printf '%s\n' "$response"
                 return 0
@@ -4069,4 +4159,4 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     exit $?
 fi
 
-export -f repl_invoke repl_build_envelope _repl_bool_to_enabled _repl_compat_marker_endpoint_field _repl_compat_marker_field _repl_create_compat_marker _repl_failsafe_clear _repl_failsafe_dir _repl_failsafe_plugin_name _repl_failsafe_workspace_root _repl_failsafe_write _repl_first_param_text _repl_internal_todo_is_enabled _repl_internal_todo_mode_value _repl_internal_todo_state_file _repl_invoke_raw _repl_invoke_raw_in_workspace _repl_invoke_with_fallback _repl_bootstrap_state _repl_emit_response _repl_generate_session_id _repl_json_escape _repl_normalized_actions_block _repl_normalized_dialog_items_block _repl_param_text _repl_path_for_bash _repl_path_for_repl _repl_pending_import_file _repl_pending_import_todo_exists _repl_persist_turn _repl_records_block_get _repl_records_block_normalize _repl_requirements_bootstrap_state _repl_requirements_copy_acceptance_http_fallback _repl_requirements_existing_for_update _repl_requirements_generate_http_fallback _repl_requirements_normalize_generate_response _repl_requirements_typed_doc_type _repl_requirements_typed_method _repl_requirements_typed_params _repl_requirements_update_get_method _repl_requirements_update_workflow_get_method _repl_requirements_workflow_doc_type _repl_requirements_workflow_params _repl_requirement_list_field _repl_response_has_empty_result _repl_response_is_error _repl_response_is_nonempty_success _repl_run_repl_with_timeout _repl_session_meta _repl_session_state_value _repl_sessionlog_import_recovery_http_fallback _repl_sessionlog_submit_http_fallback _repl_state_value _repl_submit_session _repl_todo_http_fallback _repl_todo_json_body _repl_turns_block _repl_url_path_segment _repl_turn_bump _repl_count_lines _repl_turn_has_audit_schema _repl_turn_audit_missing _repl_workflow_audit _repl_workflow_close_turn _repl_workflow_append_actions _repl_workflow_append_dialog _repl_workflow_begin_turn _repl_workflow_bootstrap _repl_workflow_complete_turn _repl_workflow_import_pending _repl_workflow_import_recovery _repl_workflow_memory _repl_workflow_open_session _repl_workflow_query_history _repl_workflow_requirements _repl_workflow_requirements_is_mutation _repl_workflow_requirements_prefers_typed _repl_workflow_todo _repl_workflow_todo_internal_tracking _repl_workflow_todo_is_mutation _repl_workflow_todo_select _repl_workflow_todo_update_selected _repl_workflow_update_turn _repl_emit_acceptance_criteria_block _repl_emit_acceptance_criteria_hydrate _repl_yaml_block_get _repl_yaml_field _repl_yaml_get 2>/dev/null || true
+export -f repl_invoke repl_build_envelope _repl_bool_to_enabled _repl_compat_marker_endpoint_field _repl_compat_marker_field _repl_create_compat_marker _repl_failsafe_clear _repl_failsafe_dir _repl_failsafe_plugin_name _repl_failsafe_workspace_root _repl_failsafe_write _repl_first_param_text _repl_internal_todo_is_enabled _repl_internal_todo_mode_value _repl_internal_todo_state_file _repl_invoke_raw _repl_invoke_raw_in_workspace _repl_invoke_with_fallback _repl_bootstrap_state _repl_emit_response _repl_generate_session_id _repl_json_array_block_get _repl_json_escape _repl_normalized_actions_block _repl_normalized_dialog_items_block _repl_param_text _repl_path_for_bash _repl_path_for_repl _repl_pending_import_file _repl_pending_import_todo_exists _repl_persist_turn _repl_records_block_get _repl_records_block_normalize _repl_requirements_acceptance_criteria_result_ok _repl_requirements_bootstrap_state _repl_requirements_copy_acceptance_http_fallback _repl_requirements_existing_for_update _repl_requirements_generate_http_fallback _repl_requirements_normalize_generate_response _repl_requirements_typed_doc_type _repl_requirements_typed_method _repl_requirements_typed_params _repl_requirements_update_get_method _repl_requirements_update_workflow_get_method _repl_requirements_workflow_doc_type _repl_requirements_workflow_params _repl_requirement_list_field _repl_response_has_empty_result _repl_response_is_error _repl_response_is_nonempty_success _repl_run_repl_with_timeout _repl_session_meta _repl_session_state_value _repl_sessionlog_import_recovery_http_fallback _repl_sessionlog_submit_http_fallback _repl_state_value _repl_submit_session _repl_todo_http_fallback _repl_todo_json_body _repl_turns_block _repl_url_path_segment _repl_turn_bump _repl_count_lines _repl_turn_has_audit_schema _repl_turn_audit_missing _repl_workflow_audit _repl_workflow_close_turn _repl_workflow_append_actions _repl_workflow_append_dialog _repl_workflow_begin_turn _repl_workflow_bootstrap _repl_workflow_complete_turn _repl_workflow_import_pending _repl_workflow_import_recovery _repl_workflow_memory _repl_workflow_open_session _repl_workflow_query_history _repl_workflow_requirements _repl_workflow_requirements_is_mutation _repl_workflow_requirements_prefers_typed _repl_workflow_todo _repl_workflow_todo_internal_tracking _repl_workflow_todo_is_mutation _repl_workflow_todo_select _repl_workflow_todo_update_selected _repl_workflow_update_turn _repl_emit_acceptance_criteria_block _repl_emit_acceptance_criteria_hydrate _repl_has_acceptance_criteria_block _repl_yaml_block_get _repl_yaml_field _repl_yaml_get 2>/dev/null || true
