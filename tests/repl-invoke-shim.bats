@@ -23,7 +23,14 @@ setup() {
 # shim-removal regresses through THIS test.
     cat > "$SANDBOX/bin/mcpserver-repl" <<'STUB'
 #!/usr/bin/env bash
-input="$(cat)"
+read_stdin_if_ready() {
+    if [ -t 0 ]; then
+        return 0
+    fi
+
+    timeout 0.5s cat 2>/dev/null || true
+}
+input="$(read_stdin_if_ready)"
 method="$(printf '%s\n' "$input" | grep '^[[:space:]]*method:' | head -1 | sed 's/^[[:space:]]*method:[[:space:]]*//')"
 {
     printf 'method=%s\n' "$method"
@@ -120,7 +127,7 @@ if [ "$method" = "client.Todo.UpdateAsync" ] && [ "${STUB_TODO_UPDATE_REJECT:-}"
 fi
 
 case "$method" in
-    client.SessionLog.SubmitAsync|client.SessionLog.QueryAsync|client.SessionLog.AppendDialogAsync|client.Todo.QueryAsync|client.Todo.UpdateAsync|client.Todo.GetAsync|client.Todo.GetByIdAsync|client.Todo.CreateAsync|client.Todo.DeleteAsync|client.Todo.AnalyzeRequirementsAsync)
+    client.SessionLog.SubmitAsync|client.SessionLog.UpsertTurnAsync|client.SessionLog.QueryAsync|client.SessionLog.AppendDialogAsync|client.Todo.QueryAsync|client.Todo.UpdateAsync|client.Todo.GetAsync|client.Todo.GetByIdAsync|client.Todo.CreateAsync|client.Todo.DeleteAsync|client.Todo.AnalyzeRequirementsAsync)
         printf 'type: response\npayload:\n  ok: true\n'
         ;;
     workflow.sessionlog.importRecovery)

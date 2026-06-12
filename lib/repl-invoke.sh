@@ -3262,6 +3262,61 @@ ${actions_section}
 EOF
 }
 
+_repl_turn_upsert_params() {
+    local source_type="$1"
+    local session_id="$2"
+    local req_id="$3"
+    local title="$4"
+    local status="$5"
+    local response_text="$6"
+    local actions_block="${7:-}"
+
+    local turn_file="${REPL_INVOKE_CACHE_DIR}/current-turn.yaml"
+    local query_text timestamp model
+    query_text="$(_repl_yaml_block_get "$(cat "$turn_file" 2>/dev/null)" "queryText")"
+    [ -z "$query_text" ] && query_text="$title"
+    timestamp="$(_repl_current_turn_value "openedAt")"
+    [ -z "$timestamp" ] && timestamp="$(_repl_now_iso)"
+    model="$(_repl_session_state_value "model")"
+    [ -z "$model" ] && model="codex"
+
+    local query_text_indented response_indented
+    query_text_indented="$(printf '%s\n' "$query_text" | sed 's/^/    /')"
+    response_indented="$(printf '%s\n' "$response_text" | sed 's/^/    /')"
+
+    local files_modified_block=""
+    local file_paths
+    file_paths="$(printf '%s\n' "$actions_block" | grep '^[[:space:]]*filePath:' | sed 's/^[[:space:]]*filePath:[[:space:]]*//')"
+    if [ -n "$file_paths" ]; then
+        files_modified_block="  filesModified:
+$(printf '%s\n' "$file_paths" | sed 's/^/    - /')"
+    fi
+
+    local actions_section=""
+    if [ -n "$actions_block" ]; then
+        actions_section="  actions:
+$(printf '%s\n' "$actions_block" | sed 's/^/    /')"
+    fi
+
+    cat <<EOF
+agent: ${source_type}
+sessionId: ${session_id}
+turn:
+  requestId: ${req_id}
+  timestamp: ${timestamp}
+  queryText: |
+${query_text_indented}
+  queryTitle: ${title}
+  response: |
+${response_indented}
+  status: ${status}
+  model: ${model}
+  tokenCount: !!int 0
+${files_modified_block}
+${actions_section}
+EOF
+}
+
 _repl_persist_turn() {
     # _repl_persist_turn <requestId> <queryTitle> <status> <responseText> [actionsYamlList]
     local req_id="$1"
@@ -3285,9 +3340,34 @@ _repl_persist_turn() {
     [ -z "$model" ] && model="codex"
     [ -z "$started" ] && started="$(_repl_now_iso)"
 
-    local turns_block
-    turns_block="$(_repl_turns_block "$req_id" "$title" "$status" "$response_text" "$actions_block")"
-    _repl_submit_session "$source_type" "$session_id" "$title_state" "$model" "$started" "in_progress" "$turns_block" "1" "$req_id" "$title" "$status" "$response_text" "$actions_block"
+    local turn_params response upsert_status failsafe_file
+    turn_params="$(_repl_turn_upsert_params "$source_type" "$session_id" "$req_id" "$title" "$status" "$response_text" "$actions_block")"
+    failsafe_file="$(_repl_failsafe_write "client.SessionLog.UpsertTurnAsync" "$turn_params" "session_upsertTurn")"
+
+    response="$(_repl_invoke_raw_in_workspace "client.SessionLog.UpsertTurnAsync" "$turn_params" "compat" 2>&1)"
+    upsert_status=$?
+    if [ $upsert_status -eq 0 ] && ! _repl_response_is_error "$response"; then
+        _repl_failsafe_clear "$failsafe_file"
+        return 0
+    fi
+
+    response="$(_repl_invoke_raw_in_workspace "client.SessionLog.UpsertTurnAsync" "$turn_params" 2>&1)"
+    upsert_status=$?
+    if [ $upsert_status -eq 0 ] && ! _repl_response_is_error "$response"; then
+        _repl_failsafe_clear "$failsafe_file"
+        return 0
+    fi
+
+    if printf '%s\n' "$response" | grep -q 'method_not_found'; then
+        _repl_failsafe_clear "$failsafe_file"
+        local turns_block
+        turns_block="$(_repl_turns_block "$req_id" "$title" "$status" "$response_text" "$actions_block")"
+        _repl_submit_session "$source_type" "$session_id" "$title_state" "$model" "$started" "in_progress" "$turns_block" "1" "$req_id" "$title" "$status" "$response_text" "$actions_block"
+        return $?
+    fi
+
+    printf '%s\n' "$response" >&2
+    return $upsert_status
 }
 
 _repl_workflow_bootstrap() {
@@ -4187,6 +4267,16 @@ ${indented_params}"
     printf '%s\n' "$envelope"
 }
 
+_repl_read_stdin_if_ready() {
+    if [ -t 0 ]; then
+        return 0
+    fi
+
+    if read -r -t 0; then
+        cat 2>/dev/null || true
+    fi
+}
+
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     method="${1:-}"
     if [ -z "$method" ]; then
@@ -4194,9 +4284,12 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         exit 64
     fi
 
-    params_yaml="$(cat 2>/dev/null || true)"
+    params_yaml="$(_repl_read_stdin_if_ready)"
     repl_invoke "$method" "$params_yaml"
     exit $?
 fi
+
+export -f _repl_read_stdin_if_ready 2>/dev/null || true
+export -f _repl_turn_upsert_params 2>/dev/null || true
 
 export -f repl_invoke repl_build_envelope _repl_bool_to_enabled _repl_compat_marker_endpoint_field _repl_compat_marker_field _repl_create_compat_marker _repl_failsafe_clear _repl_failsafe_dir _repl_failsafe_plugin_name _repl_failsafe_workspace_root _repl_failsafe_write _repl_first_param_text _repl_internal_todo_is_enabled _repl_internal_todo_mode_value _repl_internal_todo_state_file _repl_invoke_raw _repl_invoke_raw_in_workspace _repl_invoke_with_fallback _repl_bootstrap_state _repl_emit_response _repl_generate_session_id _repl_json_array_block_get _repl_json_escape _repl_normalized_actions_block _repl_normalized_dialog_items_block _repl_param_text _repl_path_for_bash _repl_path_for_repl _repl_pending_import_file _repl_pending_import_todo_exists _repl_persist_turn _repl_records_block_get _repl_records_block_normalize _repl_requirements_acceptance_criteria_result_ok _repl_requirements_bootstrap_state _repl_requirements_copy_acceptance_http_fallback _repl_requirements_existing_for_update _repl_requirements_generate_http_fallback _repl_requirements_normalize_generate_response _repl_requirements_typed_doc_type _repl_requirements_typed_method _repl_requirements_typed_params _repl_requirements_update_get_method _repl_requirements_update_workflow_get_method _repl_requirements_workflow_doc_type _repl_requirements_workflow_params _repl_requirement_list_field _repl_response_has_empty_result _repl_response_is_error _repl_response_is_nonempty_success _repl_run_repl_with_timeout _repl_session_meta _repl_session_state_value _repl_sessionlog_import_recovery_http_fallback _repl_sessionlog_submit_http_fallback _repl_state_value _repl_submit_session _repl_todo_http_fallback _repl_todo_json_body _repl_turns_block _repl_url_path_segment _repl_turn_bump _repl_count_lines _repl_turn_has_audit_schema _repl_turn_audit_missing _repl_workflow_audit _repl_workflow_close_turn _repl_workflow_append_actions _repl_workflow_append_dialog _repl_workflow_begin_turn _repl_workflow_bootstrap _repl_workflow_complete_turn _repl_workflow_import_pending _repl_workflow_import_recovery _repl_workflow_memory _repl_workflow_memory_is_mutation _repl_workflow_memory_append_action _repl_workflow_open_session _repl_workflow_query_history _repl_workflow_requirements _repl_workflow_requirements_is_mutation _repl_workflow_requirements_prefers_typed _repl_workflow_todo _repl_workflow_todo_internal_tracking _repl_workflow_todo_is_mutation _repl_workflow_todo_select _repl_workflow_todo_update_selected _repl_workflow_update_turn _repl_emit_acceptance_criteria_block _repl_emit_acceptance_criteria_hydrate _repl_has_acceptance_criteria_block _repl_yaml_block_get _repl_yaml_field _repl_yaml_get 2>/dev/null || true
