@@ -771,7 +771,7 @@ _repl_internal_todo_state_file() {
 _repl_internal_todo_mode_value() {
     local value mode state_file
 
-    value="${MCP_CODEX_INTERNAL_TODO:-${MCPSERVER_CODEX_INTERNAL_TODO:-${CODEX_MCP_TODO:-}}}"
+    value="${MCPSERVER_INTERNAL_TODO:-${MCP_CODEX_INTERNAL_TODO:-${MCPSERVER_CODEX_INTERNAL_TODO:-${CODEX_MCP_TODO:-}}}}"
     if [ -n "$value" ]; then
         mode="$(_repl_bool_to_enabled "$value" 2>/dev/null || true)"
         if [ -n "$mode" ]; then
@@ -807,7 +807,7 @@ _repl_workflow_requirements_is_mutation() {
 }
 
 _repl_workflow_requirements_prefers_typed() {
-    if [ "${MCP_CODEX_REQUIREMENTS_PREFER_WORKFLOW_CREATE:-}" = "1" ]; then
+    if [ "${MCPSERVER_REQUIREMENTS_PREFER_WORKFLOW_CREATE:-${MCP_CODEX_REQUIREMENTS_PREFER_WORKFLOW_CREATE:-}}" = "1" ]; then
         case "${1:-}" in
             createTr|createTest) return 1 ;;
         esac
@@ -1616,6 +1616,7 @@ _repl_requirements_typed_method() {
     esac
 }
 
+# FR-MCP-REQACPLUGIN-001: map an update operation to the matching typed GET client method.
 _repl_requirements_update_get_method() {
     case "${1:-}" in
         updateFr) printf 'client.Requirements.GetFrAsync' ;;
@@ -1692,6 +1693,7 @@ _repl_requirements_created_response_after_empty_success() {
     return 1
 }
 
+# FR-MCP-REQACPLUGIN-001: map an update operation to the matching workflow GET method.
 _repl_requirements_update_workflow_get_method() {
     case "${1:-}" in
         updateFr) printf 'workflow.requirements.getFr' ;;
@@ -1701,6 +1703,9 @@ _repl_requirements_update_workflow_get_method() {
     esac
 }
 
+# FR-MCP-REQACPLUGIN-001: fetch the stored representation of a requirement so partial
+# update calls can hydrate fields the caller omitted (notably acceptanceCriteria).
+# Tries the workflow.requirements.get* path first, falls back to the typed client get.
 _repl_requirements_existing_for_update() {
     local operation="$1"
     local id="$2"
@@ -1747,7 +1752,8 @@ _repl_requirements_existing_for_update() {
 _repl_requirements_typed_params() {
     local operation="$1"
     local params_yaml="${2:-}"
-    local id title body priority status notes area subarea test_type fr_id doc_type format content documents_block records_block source_format preferred_wiki_format existing
+    local id title body fr_id doc_type format content documents_block records_block source_format preferred_wiki_format
+    local priority area subarea status notes test_type existing
 
     case "$operation" in
         listFr|listTr|listTest|listMappings)
@@ -3216,7 +3222,7 @@ _repl_turns_block() {
     timestamp="$(_repl_current_turn_value "openedAt")"
     [ -z "$timestamp" ] && timestamp="$(_repl_now_iso)"
     model="$(_repl_session_state_value "model")"
-    [ -z "$model" ] && model="codex"
+    [ -z "$model" ] && model="${MCP_SESSION_MODEL:-${PLUGIN_MODEL_DEFAULT:-codex}}"
 
     local query_text_indented response_indented
     query_text_indented="$(printf '%s\n' "$query_text" | sed 's/^/        /')"
@@ -3278,7 +3284,7 @@ _repl_turn_upsert_params() {
     timestamp="$(_repl_current_turn_value "openedAt")"
     [ -z "$timestamp" ] && timestamp="$(_repl_now_iso)"
     model="$(_repl_session_state_value "model")"
-    [ -z "$model" ] && model="codex"
+    [ -z "$model" ] && model="${MCP_SESSION_MODEL:-${PLUGIN_MODEL_DEFAULT:-codex}}"
 
     local query_text_indented response_indented
     query_text_indented="$(printf '%s\n' "$query_text" | sed 's/^/    /')"
@@ -3337,7 +3343,7 @@ _repl_persist_turn() {
     model="$(_repl_session_state_value "model")"
     started="$(_repl_session_state_value "started")"
     [ -z "$title_state" ] && title_state="$title"
-    [ -z "$model" ] && model="codex"
+    [ -z "$model" ] && model="${MCP_SESSION_MODEL:-${PLUGIN_MODEL_DEFAULT:-codex}}"
     [ -z "$started" ] && started="$(_repl_now_iso)"
 
     local turn_params response upsert_status failsafe_file
@@ -3399,11 +3405,11 @@ _repl_workflow_open_session() {
     source_type="$(_repl_yaml_get "$params" "agent")"
     [ -z "$source_type" ] && source_type="$(_repl_yaml_get "$params" "sourceType")"
     [ -z "$source_type" ] && source_type="$(_repl_session_state_value "sourceType")"
-    [ -z "$source_type" ] && source_type="${MCP_SESSION_AGENT:-Codex}"
+    [ -z "$source_type" ] && source_type="${MCP_SESSION_AGENT:-${PLUGIN_AGENT_DEFAULT:-Codex}}"
 
     model="$(_repl_yaml_get "$params" "model")"
     [ -z "$model" ] && model="$(_repl_session_state_value "model")"
-    [ -z "$model" ] && model="${MCP_SESSION_MODEL:-codex}"
+    [ -z "$model" ] && model="${MCP_SESSION_MODEL:-${PLUGIN_MODEL_DEFAULT:-codex}}"
 
     title="$(_repl_yaml_get "$params" "title")"
     [ -z "$title" ] && title="$(_repl_session_state_value "title")"
@@ -3676,10 +3682,10 @@ _repl_workflow_complete_turn() {
         opened_at="$(_repl_current_turn_value "openedAt")"
         [ -z "$opened_at" ] && opened_at="$(_repl_now_iso)"
         source_type="$(_repl_session_state_value "sourceType")"
-        [ -z "$source_type" ] && source_type="Codex"
+        [ -z "$source_type" ] && source_type="${CT2R_SOURCE_TYPE:-${PLUGIN_AGENT_DEFAULT:-Codex}}"
         session_id="$(_repl_session_state_value "sessionId")"
         model="$(_repl_session_state_value "model")"
-        [ -z "$model" ] && model="codex"
+        [ -z "$model" ] && model="${MCP_SESSION_MODEL:-${PLUGIN_MODEL_DEFAULT:-codex}}"
         started="$(_repl_session_state_value "started")"
         [ -z "$started" ] && started="$(_repl_now_iso)"
 

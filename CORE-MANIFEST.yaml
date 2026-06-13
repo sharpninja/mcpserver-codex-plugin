@@ -1,0 +1,23 @@
+coreVersion: e594510
+syncedAtUtc: 2026-06-13T15:50:24Z
+files:
+  lib/cache-manager.sh: dcd1b4e893113a370dcb29af8bf1afeb81aea02a6b8cc953e8778450f12353bc
+  lib/cache-scope.sh: a904117d6da6901bdebee348c773aa85785be7be1c0be4b601daf11e3bb62530
+  lib/codex-jsonl-enrich.js: 73c73d7f464b1e5dbdc806adf2e1800cef36e135b11b6ea35172bc27156778b2
+  lib/codex-jsonl.js: bf34082be2ae9b6aae5a6260b33275548779d20cc73357c91450634fb7567099
+  lib/complete-turn-to-recovery.js: e7d015d208ebd8c8c4295e11897b4fc324ba69518a84f18ce7784d2ee7e171c8
+  lib/detect-shell.sh: e0edc8cd028bcc480df8011713daec0e9b37a983d8459836b47908a39c8cd533
+  lib/ensure-repl.sh: 1008b22aaf1bd24b3daeeaf91cf59921f6800c709149f5aa1ca81cf1d683b672
+  lib/final-response.sh: d1159fcb4c8e78d06819e3709f5605909930fec58464589d39b3b08cdac4136f
+  lib/hook-lib.sh: 31a0e59bafd441259002bab701b22db4839ac6220ba10627f929ea7c6af79eae
+  lib/marker-resolver.sh: 7f35858b996c64f024dc70e6fa18e74ef3d664052943dbc53ccebbd0a51b2335
+  lib/mcp-status.sh: 056ed5bb3a646b6daae06e03c9c3b115d66a19fd62007787da9bd7c595bb1dfd
+  lib/memory-context.sh: 0c3f5d3457bdb4729629bcd957ce898629a3464c30b45887437704ec1b4ce1f2
+  lib/pending-import-to-yaml.js: d7e46c90b025eb6bf2877a13b612976010f3010caea5fbe76e2d802091b8fb81
+  lib/plugin-env.template.sh: 65727d94c9130a8051016ea8c4ef35548f70d42c61f9f2bb6140cbafa4ce85e5
+  lib/repl-daemon.js: b93a0f2a1e26baad064dae1ce728e3f30713ba7d7106563ad7aef35be9bbec7a
+  lib/repl-invoke.sh: 36634465873faf0a76c66b9af99a6d916d9b1053efc8fc80ba9514555fedb833
+  lib/repl-persistent.sh: 50d52e913f3458cd4b27f6c5604bd5647a6fc3f238f3a033a89f1095fc84b8c2
+  lib/resolve-cache-dir.sh: f6dae8d06fd15d1df886095d879d8310c01d8954573b6ca346cd28aba738eebf
+  lib/sessionlog-recovery-body.js: 1beb3b3e3212e8d75ccbb1f7d7e3a5e8d4cf653af4f6fff17ee576ecbef0f05b
+  lib/sessionlog-submit-body.js: 16742ca92553b1e57e90d0036338c9a2dbb08ab20431c7ef8ec746205d038034

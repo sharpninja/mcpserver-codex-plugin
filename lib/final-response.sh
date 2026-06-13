@@ -11,7 +11,6 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CODEX_PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 
 response="${1:-}"
 if [ -z "$response" ] && [ ! -t 0 ]; then
@@ -22,20 +21,20 @@ if [ -z "$response" ]; then
 fi
 
 # Try to locate the Codex JSONL for the current session and turn.
-# The path may be stored in current-turn.yaml (written by the prompt-submit
-# integration) or in environment variables set by the Codex CLI.
+# The path may be stored in current-turn.yaml (written by user-prompt-submit.sh)
+# or in environment variables set by the Codex CLI.
 CODEX_JSONL_PATH="${CODEX_SESSION_FILE:-${CODEX_ROLLOUT_FILE:-}}"
 
 if [ -z "$CODEX_JSONL_PATH" ] && command -v node >/dev/null 2>&1; then
-    # Try to read from the scoped current-turn.yaml via cache-scope.sh
-    if ! type cache_scope_init >/dev/null 2>&1; then
-        # shellcheck source=./cache-scope.sh
-        source "$CODEX_PLUGIN_ROOT/lib/cache-scope.sh" 2>/dev/null || true
+    # Try to read from current-turn.yaml
+    if ! type resolve_cache_dir >/dev/null 2>&1; then
+        # shellcheck source=./resolve-cache-dir.sh
+        source "${SCRIPT_DIR}/resolve-cache-dir.sh" 2>/dev/null || true
     fi
-    if type cache_scope_init >/dev/null 2>&1; then
-        cache_scope_init "$CODEX_PLUGIN_ROOT" "$PWD" 2>/dev/null || true
-        TURN_FILE="${CACHE_DIR:-}/current-turn.yaml"
-        if [ -n "${CACHE_DIR:-}" ] && [ -f "$TURN_FILE" ]; then
+    if type resolve_cache_dir >/dev/null 2>&1; then
+        CACHE_DIR_FR="$(resolve_cache_dir 2>/dev/null || true)"
+        TURN_FILE="${CACHE_DIR_FR}/current-turn.yaml"
+        if [ -f "$TURN_FILE" ]; then
             CODEX_JSONL_PATH="$(grep '^codexJsonlPath:' "$TURN_FILE" 2>/dev/null | head -1 | sed 's/^codexJsonlPath:[[:space:]]*//' | tr -d '"' || true)"
         fi
     fi

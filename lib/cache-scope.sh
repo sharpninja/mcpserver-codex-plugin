@@ -8,6 +8,13 @@ set -uo pipefail
 
 CACHE_SCOPE_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Unified resolver: load the workspace-aware cache resolver up front (best
+# effort) so cache_scope_init can anchor through it.
+if ! type resolve_cache_dir >/dev/null 2>&1 && [ -f "$CACHE_SCOPE_SCRIPT_DIR/resolve-cache-dir.sh" ]; then
+    # shellcheck source=./resolve-cache-dir.sh
+    source "$CACHE_SCOPE_SCRIPT_DIR/resolve-cache-dir.sh" 2>/dev/null || true
+fi
+
 _cache_scope_unquote() {
     local value="${1:-}"
     value="$(printf '%s' "$value" | sed 's/^"\(.*\)"$/\1/; s/^'\''\(.*\)'\''$/\1/')"
@@ -135,7 +142,17 @@ cache_scope_init() {
     local start_dir="${2:-$(pwd)}"
     local storage_root="${PLUGIN_ROOT_OVERRIDE:-$plugin_root}"
 
-    MCP_PLUGIN_CACHE_ROOT="${storage_root}/cache"
+    # Unified resolver (Phase 2 shared core): anchor the cache root through
+    # resolve_cache_dir (override / marker / workspace aware) so scoped
+    # runtime state and cache-manager pending flushes share one tree. Falls
+    # back to <storage_root>/cache when the resolver is unavailable.
+    local base_cache=""
+    if type resolve_cache_dir >/dev/null 2>&1; then
+        base_cache="$(MCP_WORKSPACE_START_DIR="${MCP_WORKSPACE_START_DIR:-$start_dir}" MCP_PLUGIN_ROOT="${MCP_PLUGIN_ROOT:-$storage_root}" resolve_cache_dir 2>/dev/null; true)"
+    fi
+    [ -n "$base_cache" ] || base_cache="${storage_root}/cache"
+
+    MCP_PLUGIN_CACHE_ROOT="${base_cache}"
     MCP_PLUGIN_WORKSPACE_PATH="$(cache_scope_workspace_path "$start_dir")"
     MCP_PLUGIN_WORKSPACE_KEY="$(cache_scope_workspace_key "$MCP_PLUGIN_WORKSPACE_PATH")"
     MCP_PLUGIN_WORKSPACE_CACHE_DIR="${MCP_PLUGIN_CACHE_ROOT}/workspaces/${MCP_PLUGIN_WORKSPACE_KEY}"
@@ -205,31 +222,36 @@ cache_scope_session_state_file() {
 #   Buffer.from(workspaceKey).toString('base64').replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,'')
 cache_scope_workspace_key_v4() {
     local workspace_path
-    workspace_path="$(_cache_scope_normalize_path "${1:-$(pwd)}")"
+    workspace_path="$(_cache_scope_normalize_path "${1:-${MCPSERVER_WORKSPACE_PATH:-${MCP_WORKSPACE_PATH:-$(pwd)}}}")"
 
+    # Try node first (exact match to V4CacheManager TS impl)
     if command -v node >/dev/null 2>&1; then
         node -e "process.stdout.write(Buffer.from(process.argv[1]).toString('base64').replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,''))" \
             "$workspace_path" 2>/dev/null && return 0
     fi
 
+    # Fallback: openssl base64 + tr for base64url conversion
     if command -v openssl >/dev/null 2>&1; then
         printf '%s' "$workspace_path" | openssl base64 -A 2>/dev/null | tr '+/' '-_' | tr -d '=' && return 0
     fi
 
+    # Fallback: python3
     if command -v python3 >/dev/null 2>&1; then
         printf '%s' "$workspace_path" | python3 -c \
             "import sys,base64; print(base64.urlsafe_b64encode(sys.stdin.buffer.read()).decode().rstrip('='))" 2>/dev/null && return 0
     fi
 
+    # Last resort: base64 with tr (may not be available on all systems)
     printf '%s' "$workspace_path" | base64 2>/dev/null | tr -d '\n' | tr '+/' '-_' | tr -d '='
 }
 
 # cache_scope_v4_failsafe_root [workspace_path] [agent_id]
 # Returns the absolute path to the v4 failsafe root for this workspace + agent.
 # Layout: <workspace_root>/.mcpServer/failsafe/<agentId>/workspaces/<base64url>
+# Matches V4CacheManager.GetScopedCachePath (relative .mcpServer/failsafe/...) anchored to workspace root.
 cache_scope_v4_failsafe_root() {
     local workspace_path="${1:-}"
-    local agent_id="${2:-Codex}"
+    local agent_id="${2:-${MCP_AGENT_ID:-ClaudeCode}}"
 
     if [ -z "$workspace_path" ]; then
         workspace_path="$(cache_scope_workspace_path)"
