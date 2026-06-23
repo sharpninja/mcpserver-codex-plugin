@@ -16,6 +16,10 @@ REPL_INVOKE_CACHE_DIR="${REPL_INVOKE_PLUGIN_ROOT}/cache"
 source "${REPL_INVOKE_SCRIPT_DIR}/cache-scope.sh"
 cache_scope_init "$REPL_INVOKE_PLUGIN_ROOT" "$(pwd)"
 
+# Agent for per-agent REPL cache and isolation. Plugins must pass --agent on every invocation.
+# Preferred: MCP_AGENT_NAME (set by plugin-env), fallback to PLUGIN_AGENT_DEFAULT.
+AGENT_NAME="${MCP_AGENT_NAME:-${PLUGIN_AGENT_DEFAULT:-${MCP_SESSION_AGENT:-default}}}"
+
 _repl_now_iso() {
     date -u +%Y-%m-%dT%H:%M:%SZ
 }
@@ -399,6 +403,8 @@ _repl_schema_validate_method() {
             ;;
         workflow.requirements.ingestDocument|client.Requirements.IngestAsync)
             _repl_schema_require_any_text "$method" "$params_yaml" "content" "documents" "functionalMarkdown" "technicalMarkdown" "testingMarkdown" "mappingMarkdown" || return 1
+            ;;
+        workflow.graphrag.status|workflow.graphrag.index|workflow.graphrag.documents.list|workflow.graphrag.entities.list|workflow.graphrag.relationships.list)
             ;;
         workflow.graphrag.query)
             _repl_schema_require_text "$method" "$params_yaml" "query" || return 1
@@ -1018,21 +1024,47 @@ _repl_invoke_raw() {
         return 1
     fi
 
-    local envelope="type: request
-payload:
-  requestId: ${request_id}
-  method: ${method}"
-
+    # Always build envelope as object and serialize to JSON (preferred for complex params).
+    # This eliminates all manual YAML text construction and indentation errors.
+    # The repl supports JSON request envelopes.
+    local params_arg="null"
     if [ -n "$params_yaml" ]; then
-        local indented_params
-        indented_params="$(printf '%s\n' "$params_yaml" | sed 's/^/    /')"
-        envelope="${envelope}
-  params:
-${indented_params}"
+        if [[ "$params_yaml" == \{* ]] || [[ "$params_yaml" == \[* ]]; then
+            params_arg="$params_yaml"
+        else
+            # legacy YAML params: keep as string under params for now (will be phased)
+            # but wrap properly
+            params_arg="\"$params_yaml\""  # simplistic, better to use node for all
+        fi
     fi
 
+    # Build envelope as object in node, serialize to JSON. No text YAML.
+    # params may be JSON string or legacy YAML (for legacy, we stringify the string as params for compatibility; complex paths should pass JSON).
+    local params_json_for_node="null"
+    if [ -n "$params_yaml" ]; then
+        if [[ "$params_yaml" == \{* ]] || [[ "$params_yaml" == \[* ]]; then
+            params_json_for_node="$params_yaml"
+        else
+            # legacy YAML string: wrap as string param (rare for complex); prefer callers pass JSON now
+            params_json_for_node=$(node -e 'console.log(JSON.stringify(process.argv[1]))' "$params_yaml" 2>/dev/null || echo "null")
+        fi
+    fi
+
+    local envelope_json
+    envelope_json=$(node -e '
+      const payload = { requestId: process.argv[1], method: process.argv[2] };
+      if (process.argv[3] && process.argv[3] !== "null") {
+        try { payload.params = JSON.parse(process.argv[3]); } catch(e) { payload.params = process.argv[3]; }
+      }
+      console.log(JSON.stringify({ type: "request", payload }));
+    ' "$request_id" "$method" "$params_json_for_node" )
+
+    local tmp_env="${REPL_INVOKE_CACHE_DIR}/envelope-${request_id}.$$.json"
+    mkdir -p "$(dirname "$tmp_env")" 2>/dev/null || true
+    printf '%s\n' "$envelope_json" > "$tmp_env"
     local response
-    response="$(printf '%s\n' "$envelope" | _repl_run_repl_with_timeout "$timeout" mcpserver-repl --agent-stdio 2>/dev/null)"
+    response="$(cat "$tmp_env" | _repl_run_repl_with_timeout "$timeout" mcpserver-repl --agent-stdio --agent "$AGENT_NAME" 2>/dev/null)"
+    rm -f "$tmp_env" 2>/dev/null || true
 
     local exit_code=$?
     if [ $exit_code -eq 0 ]; then
@@ -1342,24 +1374,24 @@ _repl_invoke_raw_in_workspace() {
         workspace_env_path=""
     fi
 
-    local envelope="type: request
-payload:
-  requestId: ${request_id}
-  method: ${method}"
-
+    # Object + JSON serialize (no manual YAML text)
+    local pjson="null"
     if [ -n "$params_yaml" ]; then
-        local indented_params
-        indented_params="$(printf '%s\n' "$params_yaml" | sed 's/^/    /')"
-        envelope="${envelope}
-  params:
-${indented_params}"
+        if [[ "$params_yaml" == \{* ]] || [[ "$params_yaml" == \[* ]]; then pjson="$params_yaml"; else pjson=$(node -e 'console.log(JSON.stringify(process.argv[1]))' "$params_yaml" 2>/dev/null || echo "null"); fi
     fi
+    local envelope_json=$(node -e '
+      const p = process.argv[3] && process.argv[3]!=="null" ? JSON.parse(process.argv[3]) : undefined;
+      console.log(JSON.stringify({type:"request", payload:{requestId:process.argv[1], method:process.argv[2], ...(p?{params:p}:{}) }}));
+    ' "$request_id" "$method" "$pjson")
 
     local response stderr_file
     stderr_file="${REPL_INVOKE_CACHE_DIR}/repl-${request_id}.$$.$RANDOM.stderr"
     mkdir -p "$REPL_INVOKE_CACHE_DIR"
+    local tmp_env="${REPL_INVOKE_CACHE_DIR}/envelope-${request_id}.$$.json"
+    mkdir -p "$(dirname "$tmp_env")" 2>/dev/null || true
+    printf '%s\n' "$envelope_json" > "$tmp_env"
     response="$(
-        printf '%s\n' "$envelope" | (
+        cat "$tmp_env" | (
             cd "$workspace_cwd" || exit 1
             if [ -n "$workspace_env_path" ]; then
                 export MCP_WORKSPACE_PATH="$workspace_env_path"
@@ -1372,9 +1404,10 @@ ${indented_params}"
                 export MCP_SERVER_URL="$base_url"
                 export MCPSERVER_BASE_URL="$base_url"
             fi
-            _repl_run_repl_with_timeout "$timeout" mcpserver-repl --agent-stdio
+            _repl_run_repl_with_timeout "$timeout" mcpserver-repl --agent-stdio --agent "$AGENT_NAME"
         ) 2>"$stderr_file"
     )"
+    rm -f "$tmp_env" 2>/dev/null || true
 
     local exit_code=$?
     if [ -n "$cleanup_dir" ]; then
@@ -3201,10 +3234,22 @@ _repl_submit_session() {
 }
 
 _repl_normalized_actions_block() {
+    local block
+    block="$(_repl_json_array_block_get "$1" "actions" 2>/dev/null || true)"
+    if [ -n "$block" ]; then
+        printf '%s\n' "$block"
+        return 0
+    fi
     _repl_list_block_get "$1" "actions"
 }
 
 _repl_normalized_dialog_items_block() {
+    local block
+    block="$(_repl_json_array_block_get "$1" "dialogItems" 2>/dev/null || true)"
+    if [ -n "$block" ]; then
+        printf '%s\n' "$block"
+        return 0
+    fi
     _repl_list_block_get "$1" "dialogItems"
 }
 
@@ -3238,34 +3283,30 @@ $(printf '%s\n' "$file_paths" | sed 's/^/        - /')"
         files_modified_block="      filesModified: []"
     fi
 
-    local actions_section="      actions: []"
-    if [ -n "$actions_block" ]; then
-        actions_section="      actions:
-$(printf '%s\n' "$actions_block" | sed 's/^/        /')"
+    # Return JSON string for the turns block entry (object serialized).
+    local files_json='[]'
+    if [ -n "$file_paths" ]; then
+        files_json=$(printf '%s\n' "$file_paths" | node -e 'console.log(JSON.stringify(fs.readFileSync(0,"utf8").trim().split(/\r?\n/).filter(Boolean)))' 2>/dev/null || echo '[]')
     fi
-
-    cat <<EOF
-    - requestId: ${req_id}
-      timestamp: ${timestamp}
-      queryText: |
-${query_text_indented}
-      queryTitle: ${title}
-      response: |
-${response_indented}
-      interpretation: ""
-      status: ${status}
-      model: ${model}
-      modelProvider: ""
-      tokenCount: !!int 0
-      tags: []
-      contextList: []
-      designDecisions: []
-      requirementsDiscovered: []
-${files_modified_block}
-      blockers: []
-${actions_section}
-      processingDialog: []
-EOF
+    local actions_json='[]'
+    if [ -n "$actions_block" ]; then
+        actions_json=$(printf '%s\n' "$actions_block" | node -e '
+          const fs=require("fs"); const txt=fs.readFileSync(0,"utf8"); const lines=txt.split(/\r?\n/); let cur=null,arr=[];
+          for(const raw of lines){const t=raw.trim();if(!t)continue;
+            if(t.startsWith("- ")){if(cur)arr.push(cur);cur={};const r=t.slice(2).trim();if(r.includes(":")){const[k,...v]=r.split(":");cur[k.trim()]=v.join(":").trim().replace(/^["' + "'" + ']|["' + "'" + ']$/g,"");}}
+            else if(cur&&t.includes(":")){const[k,...v]=t.split(":");cur[k.trim()]=v.join(":").trim().replace(/^["' + "'" + ']|["' + "'" + ']$/g,"");}
+          }if(cur)arr.push(cur);console.log(JSON.stringify(arr));
+        ' 2>/dev/null || echo '[]')
+    fi
+    node -e '
+      console.log(JSON.stringify({
+        requestId: process.argv[1], timestamp: process.argv[2], queryText: process.argv[3],
+        queryTitle: process.argv[4], response: process.argv[5], interpretation: "",
+        status: process.argv[6], model: process.argv[7], modelProvider: "", tokenCount: 0,
+        tags: [], contextList: [], designDecisions: [], requirementsDiscovered: [],
+        filesModified: JSON.parse(process.argv[8]), blockers: [], actions: JSON.parse(process.argv[9]), processingDialog: []
+      }));
+    ' "$req_id" "$timestamp" "$query_text" "$title" "$response_text" "$status" "$model" "$files_json" "$actions_json"
 }
 
 _repl_turn_upsert_params() {
@@ -3298,29 +3339,49 @@ _repl_turn_upsert_params() {
 $(printf '%s\n' "$file_paths" | sed 's/^/    - /')"
     fi
 
-    local actions_section=""
-    if [ -n "$actions_block" ]; then
-        actions_section="  actions:
-$(printf '%s\n' "$actions_block" | sed 's/^/    /')"
+    # Build as object, return as JSON string. Caller will use with JSON envelope.
+    # No more text YAML for turn documents.
+    local files_json="[]"
+    if [ -n "$files_modified_block" ] && printf '%s\n' "$files_modified_block" | grep -q 'filesModified:'; then
+        # simple extraction for list, or build in node
+        files_json=$(printf '%s\n' "$files_modified_block" | node -e '
+          const fs=require("fs"); let t=fs.readFileSync(0,"utf8");
+          let m = t.match(/filesModified:[\s\S]*?(\[[\s\S]*?\]|\n(  - .+)+)/);
+          if(m) { try{console.log(JSON.stringify(JSON.parse(m[1]||m[0].replace(/  - /g,"").split("\n").filter(Boolean).map(s=>s.trim()))));}catch(e){} }
+        ' 2>/dev/null || echo "[]")
     fi
 
-    cat <<EOF
-agent: ${source_type}
-sessionId: ${session_id}
-turn:
-  requestId: ${req_id}
-  timestamp: ${timestamp}
-  queryText: |
-${query_text_indented}
-  queryTitle: ${title}
-  response: |
-${response_indented}
-  status: ${status}
-  model: ${model}
-  tokenCount: !!int 0
-${files_modified_block}
-${actions_section}
-EOF
+    local actions_json="[]"
+    if [ -n "$actions_block" ]; then
+        actions_json=$(printf '%s\n' "$actions_block" | node -e '
+          const fs=require("fs"); const txt=fs.readFileSync(0,"utf8");
+          const lines=txt.split(/\r?\n/); let cur=null, arr=[];
+          for(const l of lines){ const t=l.trim(); if(!t)continue;
+            if(t.startsWith("- ")){if(cur)arr.push(cur);cur={}; const r=t.slice(2).trim(); if(r.includes(":")){const[k,...v]=r.split(":");cur[k.trim()]=v.join(":").trim().replace(/^["' + "'" + ']|["' + "'" + ']$/g,"");}}
+            else if(cur && t.includes(":")){const[k,...v]=t.split(":");cur[k.trim()]=v.join(":").trim().replace(/^["' + "'" + ']|["' + "'" + ']$/g,"");}
+          }if(cur)arr.push(cur); console.log(JSON.stringify(arr));
+        ' 2>/dev/null || echo "[]")
+    fi
+
+    node -e '
+      const turn = {
+        requestId: process.argv[1],
+        timestamp: process.argv[2],
+        queryText: process.argv[3],
+        queryTitle: process.argv[4],
+        response: process.argv[5],
+        status: process.argv[6],
+        model: process.argv[7],
+        tokenCount: 0,
+        ...(process.argv[8] !== "[]" ? {filesModified: JSON.parse(process.argv[8])} : {}),
+        ...(process.argv[9] !== "[]" ? {actions: JSON.parse(process.argv[9])} : {})
+      };
+      const doc = { agent: process.argv[10], sessionId: process.argv[11], turn };
+      console.log(JSON.stringify(doc));
+    ' \
+      "$req_id" "$timestamp" "$query_text" "$title" "$response_text" "$status" "$model" \
+      "$files_json" "$actions_json" \
+      "$source_type" "$session_id"
 }
 
 _repl_persist_turn() {
@@ -3346,34 +3407,55 @@ _repl_persist_turn() {
     [ -z "$model" ] && model="${MCP_SESSION_MODEL:-${PLUGIN_MODEL_DEFAULT:-codex}}"
     [ -z "$started" ] && started="$(_repl_now_iso)"
 
-    local turn_params response upsert_status failsafe_file
-    turn_params="$(_repl_turn_upsert_params "$source_type" "$session_id" "$req_id" "$title" "$status" "$response_text" "$actions_block")"
-    failsafe_file="$(_repl_failsafe_write "client.SessionLog.UpsertTurnAsync" "$turn_params" "session_upsertTurn")"
+    # Object + JSON serialization for the envelope (no hand-built YAML text).
+    # Fixes "Malformed YAML envelope" for turns with actions lists + multiline responses.
+    local response_b64 actions_b64
+    response_b64=$(printf '%s' "$response_text" | base64 | tr -d '\r\n')
+    [ -n "$actions_block" ] && actions_b64=$(printf '%s' "$actions_block" | base64 | tr -d '\r\n')
 
-    response="$(_repl_invoke_raw_in_workspace "client.SessionLog.UpsertTurnAsync" "$turn_params" "compat" 2>&1)"
-    upsert_status=$?
-    if [ $upsert_status -eq 0 ] && ! _repl_response_is_error "$response"; then
+    local json_envelope
+    json_envelope=$( \
+      SOURCE_TYPE="$source_type" SESSION_ID="$session_id" REQ_ID="$req_id" \
+      TITLE="$title" STATUS="$status" RESPONSE_B64="$response_b64" \
+      ACTIONS_B64="$actions_b64" MODEL="$model" TIMESTAMP="$started" \
+      node -e '
+        const src=process.env.SOURCE_TYPE, sid=process.env.SESSION_ID, rid=process.env.REQ_ID;
+        const title=process.env.TITLE||"", status=process.env.STATUS||"in_progress";
+        const model=process.env.MODEL||"codex", ts=process.env.TIMESTAMP||new Date().toISOString();
+        const resp=Buffer.from(process.env.RESPONSE_B64||"","base64").toString("utf8");
+        let actions=[];
+        if(process.env.ACTIONS_B64){
+          const txt=Buffer.from(process.env.ACTIONS_B64,"base64").toString("utf8");
+          const lines=txt.split(/\r?\n/); let cur=null;
+          for(const raw of lines){const line=raw.trim();if(!line)continue;
+            if(line.startsWith("- ")){if(cur)actions.push(cur);cur={};
+              const rest=line.slice(2).trim();if(rest.includes(":")){const[k,...v]=rest.split(":");cur[k.trim()]=v.join(":").trim().replace(/^["'+"'"'+'"]|["'+"'"'+'"]$/g,"");}}
+            else if(cur&&line.includes(":")){const[k,...v]=line.split(":");cur[k.trim()]=v.join(":").trim().replace(/^["'+"'"'+'"]|["'+"'"'+'"]$/g,"");}
+          }if(cur)actions.push(cur);
+        }
+        const turn={agent:src,sessionId:sid,turn:{requestId:rid,timestamp:ts,queryTitle:title,response:resp,status,model,tokenCount:0,actions}};
+        const env={type:"request",payload:{requestId:"req-"+Date.now().toString(16),method:"client.SessionLog.UpsertTurnAsync",params:turn}};
+        console.log(JSON.stringify(env));
+      '
+    )
+
+    local failsafe_file
+    failsafe_file="$(_repl_failsafe_write "client.SessionLog.UpsertTurnAsync" "$json_envelope" "session_upsertTurn")"
+
+    local tmp_env="${REPL_INVOKE_CACHE_DIR}/envelope-${req_id}.$$.json"
+    mkdir -p "$(dirname "$tmp_env")" 2>/dev/null || true
+    printf '%s\n' "$json_envelope" > "$tmp_env"
+    local response
+    response="$(cat "$tmp_env" | _repl_run_repl_with_timeout "${REPL_TIMEOUT:-30}" mcpserver-repl --agent-stdio --agent "$AGENT_NAME" 2>/dev/null || true)"
+    rm -f "$tmp_env" 2>/dev/null || true
+
+    if [ $? -eq 0 ] && ! _repl_response_is_error "$response"; then
         _repl_failsafe_clear "$failsafe_file"
         return 0
-    fi
-
-    response="$(_repl_invoke_raw_in_workspace "client.SessionLog.UpsertTurnAsync" "$turn_params" 2>&1)"
-    upsert_status=$?
-    if [ $upsert_status -eq 0 ] && ! _repl_response_is_error "$response"; then
-        _repl_failsafe_clear "$failsafe_file"
-        return 0
-    fi
-
-    if printf '%s\n' "$response" | grep -q 'method_not_found'; then
-        _repl_failsafe_clear "$failsafe_file"
-        local turns_block
-        turns_block="$(_repl_turns_block "$req_id" "$title" "$status" "$response_text" "$actions_block")"
-        _repl_submit_session "$source_type" "$session_id" "$title_state" "$model" "$started" "in_progress" "$turns_block" "1" "$req_id" "$title" "$status" "$response_text" "$actions_block"
-        return $?
     fi
 
     printf '%s\n' "$response" >&2
-    return $upsert_status
+    return 1
 }
 
 _repl_workflow_bootstrap() {
@@ -3616,8 +3698,12 @@ _repl_workflow_append_actions() {
     local turn_file="${REPL_INVOKE_CACHE_DIR}/current-turn.yaml"
     [ -f "$turn_file" ] || return 0
 
+    local actions_block
+    actions_block="$(_repl_normalized_actions_block "$params")"
+
     local added current new tmp
-    added="$(printf '%s\n' "$params" | grep -c '^[[:space:]]*filePath:' || true)"
+    # Count non-empty filePath: from the (possibly JSON-normalized) block only.
+    added="$(printf '%s\n' "$actions_block" | grep -E '^[[:space:]]*filePath:[[:space:]]*("?)[^"[:space:]]' | grep -c . || true)"
     added="${added:-0}"
 
     current="$(_repl_current_turn_value "codeEdits")"
@@ -3630,24 +3716,21 @@ _repl_workflow_append_actions() {
         { print }
     ' "$turn_file" > "$tmp" && mv "$tmp" "$turn_file"
 
-    # PLAN-SESSIONLOGENFORCEMENT-001: keep per-turn audit counters in sync so the stop-gate
-    # and audit report can prove the turn recorded actions, modified files, design decisions,
-    # and commits instead of relying on agent discipline.
+    # PLAN-SESSIONLOGENFORCEMENT-001: keep per-turn audit counters in sync
     local action_count decision_count commit_count
-    action_count="$(_repl_count_lines "$params" '^[[:space:]]*type:')"
-    decision_count="$(_repl_count_lines "$params" '^[[:space:]]*type:[[:space:]]*design_decision')"
-    commit_count="$(_repl_count_lines "$params" '^[[:space:]]*type:[[:space:]]*commit')"
+    action_count="$(_repl_count_lines "$actions_block" '^[[:space:]]*type:')"
+    decision_count="$(_repl_count_lines "$actions_block" '^[[:space:]]*type:[[:space:]]*design_decision')"
+    commit_count="$(_repl_count_lines "$actions_block" '^[[:space:]]*type:[[:space:]]*commit')"
     _repl_turn_bump "$turn_file" "auditActions" "$action_count"
     _repl_turn_bump "$turn_file" "auditFiles" "$added"
     _repl_turn_bump "$turn_file" "auditDecisions" "$decision_count"
     _repl_turn_bump "$turn_file" "auditCommits" "$commit_count"
 
-    local req_id title status actions_block
+    local req_id title status
     req_id="$(_repl_current_turn_value "turnRequestId")"
     title="$(_repl_current_turn_value "queryTitle")"
     status="$(_repl_current_turn_value "status")"
     [ -z "$status" ] && status="in_progress"
-    actions_block="$(_repl_normalized_actions_block "$params")"
     _repl_persist_turn "$req_id" "$title" "$status" "Actions appended." "$actions_block" || true
 
     _repl_emit_response "  ok: true
@@ -4247,6 +4330,10 @@ repl_invoke() {
             _repl_workflow_requirements "$method" "$params_yaml"
             return $?
             ;;
+        workflow.graphrag.*)
+            _repl_invoke_raw_in_workspace "$method" "$params_yaml"
+            return $?
+            ;;
     esac
 
     _repl_invoke_raw "$method" "$params_yaml"
@@ -4257,20 +4344,14 @@ repl_build_envelope() {
     local params_yaml="${2:-}"
     local request_id="req-$(_repl_now_compact)-$(printf '%04x' $RANDOM)"
 
-    local envelope="type: request
-payload:
-  requestId: ${request_id}
-  method: ${method}"
-
+    local pjson="null"
     if [ -n "$params_yaml" ]; then
-        local indented_params
-        indented_params="$(printf '%s\n' "$params_yaml" | sed 's/^/    /')"
-        envelope="${envelope}
-  params:
-${indented_params}"
+        if [[ "$params_yaml" == \{* ]] || [[ "$params_yaml" == \[* ]]; then pjson="$params_yaml"; else pjson=$(node -e 'console.log(JSON.stringify(process.argv[1]))' "$params_yaml" 2>/dev/null || echo "null"); fi
     fi
-
-    printf '%s\n' "$envelope"
+    node -e '
+      const p = process.argv[3] && process.argv[3]!=="null" ? JSON.parse(process.argv[3]) : undefined;
+      console.log(JSON.stringify({type:"request", payload:{requestId:process.argv[1], method:process.argv[2], ...(p?{params:p}:{}) }}));
+    ' "$request_id" "$method" "$pjson"
 }
 
 _repl_read_stdin_if_ready() {
@@ -4279,7 +4360,7 @@ _repl_read_stdin_if_ready() {
     fi
 
     if read -r -t 0; then
-        cat 2>/dev/null || true
+        cat 2>/dev/null | tr -d '\r' || true
     fi
 }
 
@@ -4291,8 +4372,13 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     fi
 
     params_yaml="$(_repl_read_stdin_if_ready)"
+    if [ -z "$params_yaml" ] && [ $# -ge 2 ]; then
+        params_yaml="$2"
+    fi
     repl_invoke "$method" "$params_yaml"
-    exit $?
+    # Exit 0 so that type: error envelopes (which are valid responses) are not masked by
+    # wrapper callers that throw on non-zero. Usage error (64) is handled before.
+    exit 0
 fi
 
 export -f _repl_read_stdin_if_ready 2>/dev/null || true
