@@ -1,5 +1,5 @@
-coreVersion: 3afc9dd
-syncedAtUtc: 2026-06-23T20:00:49Z
+coreVersion: 1ae6bc9
+syncedAtUtc: 2026-06-23T20:17:23Z
 files:
   lib/cache-manager.sh: dcd1b4e893113a370dcb29af8bf1afeb81aea02a6b8cc953e8778450f12353bc
   lib/cache-scope.sh: a904117d6da6901bdebee348c773aa85785be7be1c0be4b601daf11e3bb62530
@@ -24,7 +24,7 @@ files:
   lib/cache-manager.ps1: 8a9312a2662d3aef4fdd7bec1a49d6193f42e7cf1676ca859dc6ff8b2612a98f
   lib/ensure-repl.ps1: 2d618985fd8fd40f184e3fe2582b475db19241a16a1c55153dae42c9ca12e894
   lib/GAPS.md: 0189e446a360d40c53b0a23956f28630fa9fe3d0811b9d1fea5ef8caa49f28df
-  lib/Invoke-McpPlugin.ps1: ec4020d6ac0e3ad33c834aedf4c9ec67a1977c25ea11c62de1452fa2926fd077
+  lib/Invoke-McpPlugin.ps1: 17772c94310d2b3b7320629b998d70d2652ff6884fb81bba4278334c9bd7f498
   lib/marker-resolver.ps1: 95cadf7eaee57d1e0b8bed3d2bfe54875a44963aea6a67a435d9b35940015c91
   lib/plugin-env.ps1: 3fac6bc859d973b68444fdd132bc4d4d66152863a508657988628017ca3c8337
   lib/repl-invoke.ps1: 3ca534e82e2ce5ede331476fad0409a27b2e264dc3f677e673621e58125da44f
