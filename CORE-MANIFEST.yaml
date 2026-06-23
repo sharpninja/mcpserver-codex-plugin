@@ -1,5 +1,5 @@
-coreVersion: 58b68e2
-syncedAtUtc: 2026-06-23T17:38:07Z
+coreVersion: 3afc9dd
+syncedAtUtc: 2026-06-23T20:00:49Z
 files:
   lib/cache-manager.sh: dcd1b4e893113a370dcb29af8bf1afeb81aea02a6b8cc953e8778450f12353bc
   lib/cache-scope.sh: a904117d6da6901bdebee348c773aa85785be7be1c0be4b601daf11e3bb62530
@@ -16,7 +16,7 @@ files:
   lib/pending-import-to-yaml.js: d7e46c90b025eb6bf2877a13b612976010f3010caea5fbe76e2d802091b8fb81
   lib/plugin-env.template.sh: 65727d94c9130a8051016ea8c4ef35548f70d42c61f9f2bb6140cbafa4ce85e5
   lib/repl-daemon.js: c8ba1d8b2c8e1540e17edf9a9b9f66031a3a5ee6ee31e4ce09115250ffa30998
-  lib/repl-invoke.sh: 6ddc3f67023faadc287cc0cf41c49f91ac0e8c82bb1002d3cb4e5aa6b7f58e1a
+  lib/repl-invoke.sh: 298834ed793e73ae9790e18b98c8a4335dc1a4b23f6df6581ff216a6a7198403
   lib/repl-persistent.sh: 7a0be2f860a3d1201f80460d8cd16363c0e3ac154dd76fa1e40cd0f73c65317b
   lib/resolve-cache-dir.sh: f6dae8d06fd15d1df886095d879d8310c01d8954573b6ca346cd28aba738eebf
   lib/sessionlog-recovery-body.js: 1beb3b3e3212e8d75ccbb1f7d7e3a5e8d4cf653af4f6fff17ee576ecbef0f05b
