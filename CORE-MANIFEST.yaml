@@ -1,5 +1,5 @@
-coreVersion: 5aad82f
-syncedAtUtc: 2026-06-25T02:19:11Z
+coreVersion: a0cb46b
+syncedAtUtc: 2026-06-25T02:58:50Z
 files:
   lib/cache-manager.sh: dcd1b4e893113a370dcb29af8bf1afeb81aea02a6b8cc953e8778450f12353bc
   lib/cache-scope.sh: a904117d6da6901bdebee348c773aa85785be7be1c0be4b601daf11e3bb62530
@@ -9,7 +9,7 @@ files:
   lib/detect-shell.sh: e0edc8cd028bcc480df8011713daec0e9b37a983d8459836b47908a39c8cd533
   lib/ensure-repl.sh: 1008b22aaf1bd24b3daeeaf91cf59921f6800c709149f5aa1ca81cf1d683b672
   lib/final-response.sh: d1159fcb4c8e78d06819e3709f5605909930fec58464589d39b3b08cdac4136f
-  lib/hook-lib.sh: d1f4fd8105d3ddd5b21af74e7c1e25fe82eb397ee414843e919100201a63b2be
+  lib/hook-lib.sh: 20d6aea3931777320042116fa4ac6eecaafa233dd6f69777b3a05602ff074fea
   lib/marker-resolver.sh: 7f35858b996c64f024dc70e6fa18e74ef3d664052943dbc53ccebbd0a51b2335
   lib/mcp-status.sh: 6b85a2ae04dc0737f19ac2914794dd041a5811503423a9412cfbd6ec5ebdb6d6
   lib/memory-context.sh: 0c3f5d3457bdb4729629bcd957ce898629a3464c30b45887437704ec1b4ce1f2
