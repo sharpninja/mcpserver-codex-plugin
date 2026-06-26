@@ -1,7 +1,5 @@
-lib/code-verify.sh
-lib/mcp.codex.status.sh
-lib/plugin-env.sh
-lib/session-start.sh
-lib/stop-gate.sh
-lib/subagent-import.sh
-lib/user-prompt-submit.sh
+lib/code-verify.ps1
+lib/session-start.ps1
+lib/stop-gate.ps1
+lib/subagent-import.ps1
+lib/user-prompt-submit.ps1

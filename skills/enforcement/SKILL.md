@@ -9,8 +9,8 @@ Codex CLI lacks a hook system, so the Per-User-Message protocol from
 `AGENTS-README-FIRST.yaml` must be invoked manually. This skill wraps that
 protocol in three scripts located in the plugin's `lib/` directory.
 
-Run `bash ${CODEX_PLUGIN_ROOT}/lib/session-start.sh <workspace-path>` once per
-workspace before Phase 1, or let `user-prompt-submit.sh` auto-bootstrap the
+Run `PowerShell ${CODEX_PLUGIN_ROOT}/lib/session-start.ps1 <workspace-path>` once per
+workspace before Phase 1, or let `user-prompt-submit.ps1` auto-bootstrap the
 session cache on first use. Runtime state is scoped under
 `cache/workspaces/<workspace-key>/sessions/<session-key>/`.
 
@@ -22,8 +22,8 @@ contract is violated.
 
 Invoke on every new user prompt **before** calling any other tool:
 
-```bash
-echo '{"prompt":"<verbatim user message>"}' | bash ${CODEX_PLUGIN_ROOT}/lib/user-prompt-submit.sh
+```powershell
+echo '{"prompt":"<verbatim user message>"}' | PowerShell ${CODEX_PLUGIN_ROOT}/lib/user-prompt-submit.ps1
 ```
 
 The script:
@@ -44,9 +44,9 @@ Immediately after you write or edit any source file
 (`.cs`, `.axaml`, `.xaml`, `.csproj`, `.fsproj`, `.vbproj`, `.razor`,
 `.cshtml`, `.ts`, `.tsx`, `.js`, `.jsx`) invoke:
 
-```bash
+```powershell
 echo '{"tool_name":"Edit","tool_input":{"file_path":"<absolute path>"}}' \
-  | bash ${CODEX_PLUGIN_ROOT}/lib/code-verify.sh
+  | PowerShell ${CODEX_PLUGIN_ROOT}/lib/code-verify.ps1
 ```
 
 The script:
@@ -66,8 +66,8 @@ The script:
 
 Before emitting your response to the user, invoke:
 
-```bash
-bash ${CODEX_PLUGIN_ROOT}/lib/stop-gate.sh
+```powershell
+PowerShell ${CODEX_PLUGIN_ROOT}/lib/stop-gate.ps1
 ```
 
 The script checks scoped `current-turn.yaml` and returns `decision: block`
@@ -88,10 +88,10 @@ payload:
       <one-paragraph summary of what was delivered>
 ```
 
-Then re-run `stop-gate.sh`. Repeat until it returns `status: passed`.
+Then re-run `stop-gate.ps1`. Repeat until it returns `status: passed`.
 
 If the build is intentionally left broken (rare), touch
-scoped `turn-accept-failure.marker` *before* the next `stop-gate.sh` call;
+scoped `turn-accept-failure.marker` *before* the next `stop-gate.ps1` call;
 the script consumes the marker on its next pass.
 
 ## Contract

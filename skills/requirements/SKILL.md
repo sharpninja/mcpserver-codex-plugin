@@ -4,7 +4,7 @@ description: This skill should be used when the user asks to "list requirements"
 ---
 ## Initialization (Codex)
 
-Call `workflow.sessionlog.bootstrap` through `lib/repl-invoke.sh` to initialize
+Call `workflow.sessionlog.bootstrap` through `lib/repl-invoke.ps1` to initialize
 the session log subsystem before issuing any workflow commands:
 
 ```yaml
@@ -16,7 +16,7 @@ payload:
 ```
 
 This is idempotent and should be called once per conversation context.
-If you bypass the wrapper for diagnostics and write to `mcpserver-repl --agent-stdio`
+If you bypass the wrapper for diagnostics and write to `PowerShell.MCP wrapper`
 directly, send one single-line JSON request envelope per stdin message.
 
 
@@ -24,7 +24,7 @@ directly, send one single-line JSON request envelope per stdin message.
 
 ## Overview
 
-To manage functional requirements (FR), technical requirements (TR), test requirements (TEST), and their traceability mappings, use this Codex plugin's `lib/repl-invoke.sh` wrapper for the `workflow.requirements.*` namespace. Do not substitute raw REST calls, generic `mcpserver-repl --agent-stdio`, helper modules, or another agent's plugin for normal requirements work.
+To manage functional requirements (FR), technical requirements (TR), test requirements (TEST), and their traceability mappings, use this Codex plugin's `lib/repl-invoke.ps1` wrapper for the `workflow.requirements.*` namespace. Do not substitute raw REST calls, generic `PowerShell.MCP wrapper`, helper modules, or another agent's plugin for normal requirements work.
 
 The wrapper validates documented params and emits single-line JSON to REPL stdio. Any direct REPL diagnostic call must use one single-line JSON request envelope, not formatted YAML.
 

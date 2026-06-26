@@ -5,11 +5,11 @@ description: This skill should be used when the user asks to "create a todo", "l
 ## Initialization (Codex)
 
 All `workflow.todo.*` examples in this skill are intended for
-`lib/repl-invoke.sh`, which translates supported calls to the real `client.*`
+`lib/repl-invoke.ps1`, which translates supported calls to the real `client.*`
 methods exposed by `mcpserver-repl`. The current wrapper supports CRUD,
 querying, requirements analysis, and selected-TODO state; the streaming prompt
 verbs described later are not exposed in this Codex wrapper.
-If you bypass the wrapper for diagnostics and write to `mcpserver-repl --agent-stdio`
+If you bypass the wrapper for diagnostics and write to `PowerShell.MCP wrapper`
 directly, send one single-line JSON request envelope per stdin message.
 
 Before using any workflow commands, call `workflow.sessionlog.bootstrap` to initialize the session log subsystem:
@@ -35,8 +35,8 @@ Do not start with TODO enumeration when session state already identifies the act
 ## Overview
 
 To interact with project TODOs, use the `workflow.todo.*` namespace through
-`lib/repl-invoke.sh`. The wrapper accepts documented params, validates them,
-and sends a single-line JSON request envelope to `mcpserver-repl --agent-stdio`.
+`lib/repl-invoke.ps1`. The wrapper accepts documented params, validates them,
+and sends a single-line JSON request envelope to `PowerShell.MCP wrapper`.
 Direct stdio callers must use the same single-line JSON envelope shape and
 receive `type: result` or `type: error` envelopes on stdout.
 
@@ -368,7 +368,7 @@ Common error codes:
 
 ## Implementation Notes
 
-- Use `repl_invoke` from `lib/repl-invoke.sh` to build and send envelopes via `mcpserver-repl --agent-stdio`.
+- Use `Invoke-McpPlugin.ps1` from `lib/repl-invoke.ps1` to build and send envelopes via `PowerShell.MCP wrapper`.
 - The `requestId` must match `^req-\d{8}T\d{6}Z-[a-z0-9]+(?:-[a-z0-9]+)*$` for every envelope.
 - All streaming operations may be cancelled by closing stdin or sending a cancellation request; the REPL guarantees a final cancellation event before closing the stream.
 - After marking a TODO done, record the action in the active session log turn using `workflow.sessionlog.appendActions` with `type: edit` and the TODO ID as context.

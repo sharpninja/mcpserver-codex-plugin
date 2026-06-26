@@ -4,7 +4,7 @@ description: This skill should be used when the user asks to "ingest text into g
 ---
 ## Initialization (Codex)
 
-Call `workflow.sessionlog.bootstrap` through `lib/repl-invoke.sh` to initialize
+Call `workflow.sessionlog.bootstrap` through `lib/repl-invoke.ps1` to initialize
 the session log subsystem before issuing any workflow commands:
 
 ```yaml
@@ -16,7 +16,7 @@ payload:
 ```
 
 This is idempotent and should be called once per conversation context.
-If you write to `mcpserver-repl --agent-stdio` directly for GraphRAG diagnostics,
+If you write to `PowerShell.MCP wrapper` directly for GraphRAG diagnostics,
 send one single-line JSON request envelope per stdin message.
 
 
@@ -24,7 +24,7 @@ send one single-line JSON request envelope per stdin message.
 
 ## Overview
 
-To interact with the workspace GraphRAG knowledge graph, use the `workflow.graphrag.*` REPL command namespace. Direct `mcpserver-repl --agent-stdio` calls must be single-line JSON request envelopes, not formatted YAML. GraphRAG combines graph-based retrieval with semantic search, enabling richer context retrieval than vector-only approaches.
+To interact with the workspace GraphRAG knowledge graph, use the `workflow.graphrag.*` REPL command namespace. Direct `PowerShell.MCP wrapper` calls must be single-line JSON request envelopes, not formatted YAML. GraphRAG combines graph-based retrieval with semantic search, enabling richer context retrieval than vector-only approaches.
 
 GraphRAG is disabled by default. Confirm it is active for the workspace before calling any operations — `workflow.graphrag.status` will report `enabled: false` if it has not been configured.
 

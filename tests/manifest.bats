@@ -100,7 +100,7 @@ PY
 }
 
 @test "manifest skillsPath points to every expected skill entrypoint" {
-    for skill in device enforcement graphrag requirements session todo workflow workspace sync-logs commit-sync wrap-up; do
+    for skill in device enforcement graphrag requirements session todo triage workflow workspace sync-logs commit-sync wrap-up; do
         [ -s "$SKILLS_DIR/$skill/SKILL.md" ]
     done
 }
@@ -153,6 +153,31 @@ PY
     for skill in "${WORKFLOW_SKILLS[@]}"; do
         [ -s "$SKILLS_DIR/$skill/SKILL.md" ]
     done
+}
+
+@test "triage skill documents async incidental bug reporting for TEST-MCP-PLUGIN-TRIAGE-001" {
+    local skill_file="$SKILLS_DIR/triage/SKILL.md"
+    [ -s "$skill_file" ]
+    grep -Eiq "incidental bug" "$skill_file"
+    grep -Eiq "active requested fix" "$skill_file"
+    grep -Eiq "not expect immediate resolution" "$skill_file"
+    grep -Eiq "continue" "$skill_file"
+    grep -q "triage_report" "$skill_file"
+    grep -q "triage_status" "$skill_file"
+    grep -q "workflow.triage.report" "$skill_file"
+}
+
+@test "REPL YAML schema exposes workflow.triage methods for TEST-MCP-PLUGIN-TRIAGE-001" {
+    local schema_file="$PLUGIN_ROOT/schemas/repl-yaml-message.schema.json"
+    [ -s "$schema_file" ]
+    grep -Fq 'workflow\\.(sessionlog|todo|memory|requirements|graphrag|triage)' "$schema_file"
+    grep -q '"triageRules"' "$schema_file"
+    grep -q 'workflow.triage.report' "$schema_file"
+    grep -q 'workflow.triage.getReport' "$schema_file"
+    grep -q 'workflow.triage.queryGroups' "$schema_file"
+    grep -q 'workflow.triage.getGroup' "$schema_file"
+    grep -q 'workflow.triage.flushGroup' "$schema_file"
+    grep -q 'workflow.triage.retryGroup' "$schema_file"
 }
 
 @test "hook and support scripts exist with bash shebangs" {

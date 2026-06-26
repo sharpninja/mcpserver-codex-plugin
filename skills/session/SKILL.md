@@ -5,10 +5,10 @@ description: This skill should be used when the user asks to "start session", "l
 ## Initialization (Codex)
 
 All `workflow.sessionlog.*` examples in this skill are intended for
-`lib/repl-invoke.sh`, which translates them to the real `client.*` methods
+`lib/repl-invoke.ps1`, which translates them to the real `client.*` methods
 that `mcpserver-repl` exposes. For a one-shot bootstrap plus session open,
-prefer `bash ${CODEX_PLUGIN_ROOT}/lib/session-start.sh <workspace-path>`.
-If you bypass the wrapper for diagnostics and write to `mcpserver-repl --agent-stdio`
+prefer `PowerShell ${CODEX_PLUGIN_ROOT}/lib/session-start.ps1 <workspace-path>`.
+If you bypass the wrapper for diagnostics and write to `PowerShell.MCP wrapper`
 directly, send one single-line JSON request envelope per stdin message.
 
 `workflow.sessionlog.*` is a Codex plugin workflow/REPL namespace, not a
@@ -55,7 +55,7 @@ For phone-driven tasks:
 ## Overview
 
 To manage agent session logs, use the `workflow.sessionlog.*` namespace through
-`lib/repl-invoke.sh`. Session logging captures agent activity, reasoning
+`lib/repl-invoke.ps1`. Session logging captures agent activity, reasoning
 dialog, file operations, and design decisions as a structured audit trail. The
 wrapper validates documented params and emits single-line JSON to REPL stdio.
 
@@ -356,7 +356,7 @@ After a server restart or agent reconnect:
 
 ## Implementation Notes
 
-- Use `repl_invoke` from `lib/repl-invoke.sh` to build and dispatch envelopes.
+- Use `Invoke-McpPlugin.ps1` from `lib/repl-invoke.ps1` to build and dispatch envelopes.
 - Generate request IDs with the current UTC timestamp to guarantee uniqueness: `req-$(date -u +%Y%m%dT%H%M%SZ)-<slug>`.
 - Post `beginTurn` before starting any work on a user request; post `completeTurn` or `failTurn` after work ends. Never defer these calls.
 - Log all design decisions in `appendDialog` with `category: decision` AND in `appendActions` with `type: design_decision`.
