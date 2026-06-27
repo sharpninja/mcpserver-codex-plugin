@@ -1,5 +1,5 @@
-coreVersion: 07db816
-syncedAtUtc: 2026-06-26T20:13:25Z
+coreVersion: 71bb01a
+syncedAtUtc: 2026-06-27T22:54:27Z
 files:
   lib/cache-manager.ps1: e3bc25080de032a072b07cc1bac20214ac8eef041b557cafb781fd92010249ad
   lib/ensure-repl.ps1: 2d618985fd8fd40f184e3fe2582b475db19241a16a1c55153dae42c9ca12e894
@@ -7,7 +7,7 @@ files:
   lib/Invoke-McpPlugin.ps1: e858114874277b11bf2463748ae57a427800159b562a7915c805c625e612bd84
   lib/marker-resolver.ps1: 95cadf7eaee57d1e0b8bed3d2bfe54875a44963aea6a67a435d9b35940015c91
   lib/mcp-status.ps1: 9d409cdf34d2fb06fd71d51c85ee62926a22afea8ff9a963cac88d6ceeb353d6
-  lib/plugin-env.ps1: 9ff7efb45c6bab822e3da8ed8aad4fa03db0d937065016517bf4681446272444
+  lib/plugin-env.ps1: 8e82c0f2fa43685b17f4ba54644a8dd5704b47ff10a11a6c24bb273d4536ee83
   lib/plugin-hook.ps1: 98e8bd7f9285ffd85b938ed98640bfb1fb7a2e4e85ff297e71e52dcd223ed1ba
-  lib/repl-invoke.ps1: 9dab84117f6c80ee886089779866a1386b9ce467ce27b9eb705554f1477ef03b
+  lib/repl-invoke.ps1: 285fbaa7ac7defb7bbb46dcb792c1a236466f9a1f4b85e8e777e7a68d967bd74
   lib/resolve-cache-dir.ps1: 5fb8fa68c9b529f1bbfa362821fd3dd92d065a0ad2a8dc19839fa5cdc30a3807

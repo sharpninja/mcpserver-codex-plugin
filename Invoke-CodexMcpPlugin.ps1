@@ -35,39 +35,6 @@ function Resolve-FullPath {
     return $resolved.ProviderPath
 }
 
-function Resolve-BashExecutable {
-    param([string]$Candidate)
-
-    if ($Candidate) {
-        return (Resolve-FullPath $Candidate)
-    }
-
-    $gitBash = Join-Path ${env:ProgramFiles} 'Git\bin\bash.exe'
-    if (Test-Path -LiteralPath $gitBash) {
-        return $gitBash
-    }
-
-    $command = Get-Command bash.exe -ErrorAction SilentlyContinue
-    if ($command) {
-        return $command.Source
-    }
-
-    throw 'Unable to find bash.exe. Install Git for Windows or pass -BashPath.'
-}
-
-function ConvertTo-BashPath {
-    param([Parameter(Mandatory)][string]$Path)
-
-    $full = Resolve-FullPath $Path
-    if ($full -match '^([A-Za-z]):\\(.*)$') {
-        $drive = $Matches[1].ToLowerInvariant()
-        $tail = $Matches[2] -replace '\\', '/'
-        return "/$drive/$tail"
-    }
-
-    return ($full -replace '\\', '/')
-}
-
 function Read-OptionalText {
     param(
         [string]$Inline,
@@ -90,26 +57,41 @@ function Read-OptionalText {
     return ''
 }
 
-function Invoke-BashPluginScript {
+function Resolve-PowerShellExecutable {
+    $command = Get-Command pwsh.exe -ErrorAction SilentlyContinue
+    if ($command) {
+        return $command.Source
+    }
+
+    throw 'Unable to find pwsh.exe. Install PowerShell 7 before using the MCP plugin.'
+}
+
+function Invoke-PowerShellPluginScript {
     param(
         [Parameter(Mandatory)][string]$ScriptPath,
         [string[]]$Arguments = @(),
         [string]$StandardInput = ''
     )
 
-    $bash = Resolve-BashExecutable $BashPath
+    $pwsh = Resolve-PowerShellExecutable
     $pluginRootFull = Resolve-FullPath $PluginRoot
     $workspaceFull = Resolve-FullPath $WorkspacePath
     $cacheRootFull = if ($CacheRoot) { Resolve-FullPath $CacheRoot } elseif ($env:PLUGIN_ROOT_OVERRIDE) { Resolve-FullPath $env:PLUGIN_ROOT_OVERRIDE } else { $pluginRootFull }
 
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
-    $startInfo.FileName = $bash
+    $startInfo.FileName = $pwsh
     $startInfo.WorkingDirectory = $workspaceFull
     $startInfo.UseShellExecute = $false
     $startInfo.RedirectStandardInput = $true
     $startInfo.RedirectStandardOutput = $true
     $startInfo.RedirectStandardError = $true
-    $startInfo.ArgumentList.Add((ConvertTo-BashPath $ScriptPath))
+    $startInfo.ArgumentList.Add('-NoLogo')
+    $startInfo.ArgumentList.Add('-NoProfile')
+    $startInfo.ArgumentList.Add('-NonInteractive')
+    $startInfo.ArgumentList.Add('-ExecutionPolicy')
+    $startInfo.ArgumentList.Add('Bypass')
+    $startInfo.ArgumentList.Add('-File')
+    $startInfo.ArgumentList.Add($ScriptPath)
     foreach ($argument in $Arguments) {
         $startInfo.ArgumentList.Add($argument)
     }
@@ -117,6 +99,16 @@ function Invoke-BashPluginScript {
     $startInfo.Environment['PLUGIN_ROOT_OVERRIDE'] = $cacheRootFull
     $startInfo.Environment['MCP_WORKSPACE_PATH'] = $workspaceFull
     $startInfo.Environment['MCPSERVER_WORKSPACE_PATH'] = $workspaceFull
+    $startInfo.Environment['MCP_PLUGIN_HOST'] = 'codex'
+    $startInfo.Environment['PLUGIN_AGENT_DEFAULT'] = 'Codex'
+    $startInfo.Environment['PLUGIN_MODEL_DEFAULT'] = 'codex'
+    $startInfo.Environment['PLUGIN_TAG'] = 'codex'
+    $startInfo.Environment['MCP_AGENT_NAME'] = 'Codex'
+    $startInfo.Environment['MCP_AGENT_ID'] = 'Codex'
+    $startInfo.Environment['MCP_SESSION_AGENT'] = 'Codex'
+    $startInfo.Environment['MCP_SESSION_MODEL'] = 'codex'
+    $startInfo.Environment['CT2R_SOURCE_TYPE'] = 'Codex'
+    $startInfo.Environment['CT2R_MODEL'] = 'codex'
 
     $process = [System.Diagnostics.Process]::new()
     $process.StartInfo = $startInfo
@@ -172,7 +164,7 @@ $pluginRootFull = Resolve-FullPath $PluginRoot
 
 switch ($Command) {
     'Status' {
-        Invoke-BashPluginScript -ScriptPath (Join-Path $pluginRootFull 'lib\mcp.codex.status.sh')
+        Invoke-PowerShellPluginScript -ScriptPath (Join-Path $pluginRootFull 'lib\mcp-status.ps1')
     }
     'Invoke' {
         if (-not $Method) {
@@ -181,7 +173,7 @@ switch ($Command) {
 
         $paramsText = Read-OptionalText -Inline $Params -HasInline:$($PSBoundParameters.ContainsKey('Params')) -Path $ParamsPath
 
-        Invoke-BashPluginScript -ScriptPath (Join-Path $pluginRootFull 'lib\repl-invoke.sh') -Arguments @($Method) -StandardInput ($paramsText ?? '')
+        Invoke-PowerShellPluginScript -ScriptPath (Join-Path $pluginRootFull 'lib\repl-invoke.ps1') -Arguments @('-Method', $Method, '-ParamsYaml', ($paramsText ?? ''))
     }
     'CompleteTurn' {
         $responseText = Read-OptionalText -Inline $Response -HasInline:$($PSBoundParameters.ContainsKey('Response')) -Path $ResponsePath
@@ -189,6 +181,6 @@ switch ($Command) {
             $responseText = 'Turn completed.'
         }
 
-        Invoke-BashPluginScript -ScriptPath (Join-Path $pluginRootFull 'lib\final-response.sh') -StandardInput $responseText
+        Invoke-PowerShellPluginScript -ScriptPath (Join-Path $pluginRootFull 'lib\final-response.ps1') -StandardInput $responseText
     }
 }
