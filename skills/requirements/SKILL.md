@@ -30,6 +30,64 @@ The wrapper validates documented params and emits single-line JSON to REPL stdio
 
 The database is the source of truth for requirements. Markdown files are import/export projections only. Every operation is scoped to the workspace resolved from the signed marker, and generated workspace output must contain only the requested workspace's FR, TR, TEST, and traceability links.
 
+## Requirement Scope Layers
+
+Plugin version 1.13.0 and newer exposes native layer operations. Treat this section as the layer API reference when plugin status reports these methods; do not ask the operator or inspect wrapper source just to learn the parameter shapes.
+
+- `workflow.requirements.listLayers` / `req_list_layers` / `client.Requirements.ListRequirementLayersAsync`: omit params.
+- `workflow.requirements.createLayer` / `req_create_layer` / `client.Requirements.CreateRequirementLayerAsync`: required params are `key`, `order`, and `name`; optional params are `description` and `scopeEndLayerKey`.
+- `workflow.requirements.updateLayer` / `req_update_layer` / `client.Requirements.UpdateRequirementLayerAsync`: required param is `key`; optional params are `name`, `description`, and `scopeEndLayerKey`. Layer `order` is immutable; create a new layer rather than attempting to update `order`.
+- `workflow.requirements.effective` / `req_effective` / `client.Requirements.GetEffectiveRequirementsAsync`: optional param is `layerKey`; omit `layerKey` to use the active workspace layer.
+
+Use camelCase exactly in YAML:
+
+```yaml
+type: request
+payload:
+  requestId: req-20260409T115900Z-listlayers-001
+  method: workflow.requirements.listLayers
+  params: {}
+```
+
+```yaml
+type: request
+payload:
+  requestId: req-20260409T115901Z-createlayer-001
+  method: workflow.requirements.createLayer
+  params:
+    key: future
+    order: 20
+    name: Future Layer
+    description: Requirements that are documented but not currently enforceable
+```
+
+```yaml
+type: request
+payload:
+  requestId: req-20260409T115902Z-updatelayer-001
+  method: workflow.requirements.updateLayer
+  params:
+    key: future
+    name: Future Layer
+    scopeEndLayerKey: release
+```
+
+```yaml
+type: request
+payload:
+  requestId: req-20260409T115903Z-effective-001
+  method: workflow.requirements.effective
+  params:
+    layerKey: future
+```
+
+FR, TR, TEST, and batch create/update commands also accept requirement scope fields:
+
+- `scopeStartLayerKey`: first layer where the requirement is effective.
+- `scopeEndLayerKey`: last layer where the requirement is effective; omit for open-ended scope.
+
+Omit both fields for requirements that are effective in the default/current layer.
+
 ## Requirement ID Conventions
 
 Three ID spaces are in use:
