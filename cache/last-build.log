@@ -1,0 +1,12 @@
+  Determining projects to restore...
+  All projects are up-to-date for restore.
+  McpServer.Client -> F:\GitHub\McpServerManager\lib\McpServer\src\McpServer.Client\bin\Debug\net10.0\McpServer.Client.dll
+  McpServerManager.UI.Core -> F:\GitHub\McpServerManager\src\McpServerManager.UI.Core\bin\Debug\net10.0\McpServerManager.UI.Core.dll
+  McpServerManager.Web -> F:\GitHub\McpServerManager\src\McpServerManager.Web\bin\Debug\net10.0\McpServerManager.Web.dll
+  McpServerManager.Web.Tests -> F:\GitHub\McpServerManager\tests\McpServerManager.Web.Tests\bin\Debug\net10.0\McpServerManager.Web.Tests.dll
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:04.23

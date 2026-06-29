@@ -1,0 +1,5 @@
+method: client.SessionLog.UpsertTurnAsync
+label: session_upsertTurn
+timestamp: 20260628T212107Z
+params:
+  {"type":"request","payload":{"requestId":"req-20260628T212107Z-28904","method":"client.SessionLog.UpsertTurnAsync","params":{"agent":"Codex","sessionId":"Codex-20260628T211856Z","turn":{"requestId":"req-20260628T211857Z-prompt-32d9","timestamp":"2026-06-28T21:18:57Z","queryText":"Clean up AGENTS-README-FIRST.yaml.deleted-* marker backup files","queryTitle":"Clean up AGENTS-README-FIRST.yaml.deleted-* marker backup fi","response":"Recycled 60 AGENTS-README-FIRST.yaml.deleted-* marker backup files from the root workspace and mcpserver-opencode-plugin. Verified no matching backups remain in scanned repo roots. Root git status now shows tracked deletions for the removed marker backups; opencode plugin git status is clean.","status":"completed","model":"codex","tokenCount":0}}}}
