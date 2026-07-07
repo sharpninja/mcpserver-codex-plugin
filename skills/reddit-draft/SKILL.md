@@ -42,5 +42,5 @@ use the `reddit-publish` skill instead.
 
 - Drafting never publishes. To fill the composer without saving, add `-WhatIf`.
 - The body is written to Reddit's Markdown editor so links render.
-- Flair, if specified, must be set manually (the module emits a warning).
+- Flair, if specified, is selected automatically; if it is not an available flair in that subreddit the module warns and lists the options.
 - Only draft content the user has provided or approved; do not invent post text.
