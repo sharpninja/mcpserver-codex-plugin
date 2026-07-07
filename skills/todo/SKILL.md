@@ -1,16 +1,18 @@
 ---
 name: TODO Management
-description: This skill should be used when the user asks to "create a todo", "list todos", "update todo", "query tasks", "check todo status", "plan implementation", "mark todo done"
+description: Use when the user asks to "create a todo", "list todos", "update todo", "query tasks", "check todo status", "plan implementation", or "mark todo done".
+version: 0.1.0
 ---
-## Initialization (Codex)
 
-All `workflow.todo.*` examples in this skill are intended for
-`lib/repl-invoke.ps1`, which translates supported calls to the real `client.*`
-methods exposed by `mcpserver-repl`. The current wrapper supports CRUD,
-querying, requirements analysis, and selected-TODO state; the streaming prompt
-verbs described later are not exposed in this Codex wrapper.
-If you bypass the wrapper for diagnostics and write to `PowerShell.MCP wrapper`
-directly, send one single-line JSON request envelope per stdin message.
+# TODO Management
+
+## Overview
+
+To interact with project TODOs, use the `workflow.todo.*` REPL command namespace through `lib/repl-invoke.ps1` via the `PowerShell.MCP wrapper`. The wrapper accepts the documented params, validates them, and sends a single-line JSON request envelope to `PowerShell.MCP wrapper`. Direct stdio callers must use the same shape: one single-line JSON request envelope per message, not formatted YAML. The server returns a `type: result` or `type: error` envelope on stdout. Streaming commands additionally emit a sequence of `type: event` envelopes before the final result.
+
+The YAML blocks in this skill illustrate the logical structure of each envelope for readability; the actual wire format is single-line JSON.
+
+## Session Log Bootstrap
 
 Before using any workflow commands, call `workflow.sessionlog.bootstrap` to initialize the session log subsystem:
 
@@ -22,34 +24,20 @@ payload:
   params: {}
 ```
 
-This is idempotent and should be called once per conversation context.
-
-
-# TODO Management
+This call is idempotent and should be made once per conversation context.
 
 ## Usage Guidance
 
-Use TODO data to refine or confirm the current plan after checking session/task state.
-Do not start with TODO enumeration when session state already identifies the active task.
+Use TODO data to refine or confirm the current plan after checking session/task state. Do not start with TODO enumeration when session state already identifies the active task.
 
-## Overview
+## Internal TODO Tracking Toggle
 
-To interact with project TODOs, use the `workflow.todo.*` namespace through
-`lib/repl-invoke.ps1`. The wrapper accepts documented params, validates them,
-and sends a single-line JSON request envelope to `PowerShell.MCP wrapper`.
-Direct stdio callers must use the same single-line JSON envelope shape and
-receive `type: result` or `type: error` envelopes on stdout.
-
-## Codex Internal TODO Tracking Toggle
-
-By default, Codex keeps transient checklist state locally and uses MCP TODOs
-only when the task needs durable workspace TODO tracking. To make MCP TODOs the
-backing store for durable Codex plan items in a workspace:
+By default, the agent keeps transient checklist state locally and uses MCP TODOs only when the task needs durable workspace TODO tracking. To make MCP TODOs the backing store for durable plan items in a workspace:
 
 ```yaml
 type: request
 payload:
-  requestId: req-20260409T120000Z-internal-todo-enable
+  requestId: req-20260409T115900Z-todo-internal-enable
   method: workflow.todo.internal.enable
   params: {}
 ```
@@ -59,22 +47,19 @@ To turn it off:
 ```yaml
 type: request
 payload:
-  requestId: req-20260409T120000Z-internal-todo-disable
+  requestId: req-20260409T115901Z-todo-internal-disable
   method: workflow.todo.internal.disable
   params: {}
 ```
 
-`workflow.todo.internal.status` reports the active state and whether it came
-from cache, default behavior, or an environment override. The same behavior can
-be forced for a process with `MCP_CODEX_INTERNAL_TODO=1` or disabled with
-`MCP_CODEX_INTERNAL_TODO=0`.
+`workflow.todo.internal.status` reports the active state and whether it came from the cached setting, default behavior, or an environment override. An environment-variable override, when set, takes precedence over the cached setting for the current process: set it to `1` to force-enable internal tracking or `0` to force-disable it. The plugin defines the specific override variable name.
 
 ## TODO ID Naming Conventions
 
 Persist only IDs that conform to one of two patterns:
 
-- `^[A-Z]+-[A-Z0-9]+-\d{3}$` — three-segment uppercase kebab-case, e.g. `PLAN-NAMINGCONVENTIONS-001`, `MCP-AUTH-042`
-- `^ISSUE-\d+$` — GitHub-backed canonical ID, e.g. `ISSUE-17`
+- `^[A-Z]+-[A-Z0-9]+-\d{3}$`: three-segment uppercase kebab-case, e.g. `PLAN-NAMINGCONVENTIONS-001`, `MCP-AUTH-042`
+- `^ISSUE-\d+$`: GitHub-backed canonical ID, e.g. `ISSUE-17`
 
 The special create-only value `ISSUE-NEW` instructs the server to create a GitHub issue, rewrite the stored ID to `ISSUE-{number}`, and return the canonical form. After the first sync, the `description` / `body` of an `ISSUE-{number}` TODO is immutable from the server side; subsequent update calls surface the change as a GitHub issue comment instead of overwriting the body.
 
@@ -253,10 +238,6 @@ payload:
 
 ## Streaming Status Analysis
 
-This streaming verb is not currently exposed by the Codex wrapper. Use
-`workflow.todo.get`, `workflow.todo.query`, and `workflow.todo.analyzeRequirements`
-instead.
-
 To request an AI-driven status analysis of a TODO, showing blockers and dependency state:
 
 ```yaml
@@ -296,8 +277,6 @@ payload:
 
 ## Streaming Plan Generation
 
-This streaming verb is not currently exposed by the Codex wrapper.
-
 To generate an implementation plan for a TODO and stream the result:
 
 ```yaml
@@ -312,8 +291,6 @@ payload:
 Events follow the same `eventType: plan.progress` / `eventType: plan.complete` pattern as status streaming. The completion event includes a structured plan document.
 
 ## Streaming Implementation Execution
-
-This streaming verb is not currently exposed by the Codex wrapper.
 
 To execute an AI-driven implementation run for a TODO and stream progress:
 
@@ -360,11 +337,11 @@ payload:
 
 Common error codes:
 
-- `todo_not_found` — no TODO with the specified ID
-- `todo_already_exists` — a TODO with the same ID already exists
-- `invalid_todo_id` — ID violates naming convention
-- `no_selection` — `updateSelected` called with no active selection
-- `stream_error` — a streaming operation failed mid-stream
+- `todo_not_found`: no TODO with the specified ID
+- `todo_already_exists`: a TODO with the same ID already exists
+- `invalid_todo_id`: ID violates naming convention
+- `no_selection`: `updateSelected` called with no active selection
+- `stream_error`: a streaming operation failed mid-stream
 
 ## Implementation Notes
 

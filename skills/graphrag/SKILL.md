@@ -1,32 +1,16 @@
 ---
 name: GraphRAG Knowledge Graph
-description: This skill should be used when the user asks to "ingest text into graphrag", "add document to knowledge graph", "create entity", "create relationship", "query knowledge graph", "list graph entities", "delete document"
+description: Use when the user asks to "ingest text into graphrag", "add document to knowledge graph", "create entity", "create relationship", "query knowledge graph", "list graph entities", "delete document"
+version: 0.1.0
 ---
-## Initialization (Codex)
-
-Call `workflow.sessionlog.bootstrap` through `lib/repl-invoke.ps1` to initialize
-the session log subsystem before issuing any workflow commands:
-
-```yaml
-type: request
-payload:
-  requestId: req-20260409T120000Z-bootstrap-001
-  method: workflow.sessionlog.bootstrap
-  params: {}
-```
-
-This is idempotent and should be called once per conversation context.
-If you write to `PowerShell.MCP wrapper` directly for GraphRAG diagnostics,
-send one single-line JSON request envelope per stdin message.
-
 
 # GraphRAG Knowledge Graph
 
 ## Overview
 
-To interact with the workspace GraphRAG knowledge graph, use the `workflow.graphrag.*` REPL command namespace. Direct `PowerShell.MCP wrapper` calls must be single-line JSON request envelopes, not formatted YAML. GraphRAG combines graph-based retrieval with semantic search, enabling richer context retrieval than vector-only approaches.
+To interact with the workspace GraphRAG knowledge graph, use the `workflow.graphrag.*` REPL command namespace via your agent's MCP Server REPL wrapper. When sending requests to the REPL over stdio directly, each message must be one single-line JSON request envelope per message, not formatted YAML. GraphRAG combines graph-based retrieval with semantic search, enabling richer context retrieval than vector-only approaches.
 
-GraphRAG is disabled by default. Confirm it is active for the workspace before calling any operations — `workflow.graphrag.status` will report `enabled: false` if it has not been configured.
+GraphRAG is disabled by default. Confirm it is active for the workspace before calling any operations: `workflow.graphrag.status` will report `enabled: false` if it has not been configured.
 
 ## Checking GraphRAG Status
 
@@ -98,9 +82,9 @@ payload:
 
 Valid `mode` values:
 
-- `local` — focuses on directly relevant entities and their immediate relationships; lower latency
-- `global` — traverses community structure for broad thematic answers; higher coverage
-- `drift` — follows conceptual drift to surface related but non-obvious connections
+- `local`: focuses on directly relevant entities and their immediate relationships; lower latency
+- `global`: traverses community structure for broad thematic answers; higher coverage
+- `drift`: follows conceptual drift to surface related but non-obvious connections
 
 All params except `query` are optional. The result includes an `answer`, source `citations`, and optionally the raw `chunks`, `entities`, and `relationships` used:
 
@@ -152,10 +136,10 @@ payload:
 
 Required: `content`. Optional fields:
 
-- `title` — human-readable document name (defaults to a generated ID if omitted)
-- `sourceType` — classification tag, defaults to `adhoc-text`
-- `sourceKey` — unique path/key for the document; defaults to `title` or a generated ID
-- `triggerReindex` — when `true`, starts a full index rebuild after ingestion
+- `title`: human-readable document name (defaults to a generated ID if omitted)
+- `sourceType`: classification tag, defaults to `adhoc-text`
+- `sourceKey`: unique path/key for the document; defaults to `title` or a generated ID
+- `triggerReindex`: when `true`, starts a full index rebuild after ingestion
 
 ```yaml
 type: result
@@ -447,13 +431,13 @@ payload:
 
 Common error codes for GraphRAG operations:
 
-- `graphrag_disabled` — GraphRAG is not enabled for this workspace
-- `graphrag_not_indexed` — corpus exists but has not been indexed yet; call `index` first
-- `document_not_found` — no document with the specified ID
-- `entity_not_found` — no entity with the specified ID
-- `relationship_not_found` — no relationship with the specified ID
-- `ingestion_error` — text could not be chunked or stored
-- `index_error` — indexing operation failed; check status for `lastError`
+- `graphrag_disabled`: GraphRAG is not enabled for this workspace
+- `graphrag_not_indexed`: corpus exists but has not been indexed yet; call `index` first
+- `document_not_found`: no document with the specified ID
+- `entity_not_found`: no entity with the specified ID
+- `relationship_not_found`: no relationship with the specified ID
+- `ingestion_error`: text could not be chunked or stored
+- `index_error`: indexing operation failed; check status for `lastError`
 
 ## Typical Workflow
 
