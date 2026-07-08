@@ -1,5 +1,5 @@
-coreVersion: d7e1c569
-syncedAtUtc: 2026-07-07T13:59:05Z
+coreVersion: 873c4b91
+syncedAtUtc: 2026-07-08T21:05:41Z
 files:
   lib/cache-manager.ps1: e3bc25080de032a072b07cc1bac20214ac8eef041b557cafb781fd92010249ad
   lib/ensure-repl.ps1: 2d618985fd8fd40f184e3fe2582b475db19241a16a1c55153dae42c9ca12e894
