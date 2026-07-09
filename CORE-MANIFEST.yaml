@@ -1,5 +1,5 @@
-coreVersion: 873c4b91
-syncedAtUtc: 2026-07-08T21:05:41Z
+coreVersion: 7a755c11
+syncedAtUtc: 2026-07-09T22:46:50Z
 files:
   lib/cache-manager.ps1: e3bc25080de032a072b07cc1bac20214ac8eef041b557cafb781fd92010249ad
   lib/ensure-repl.ps1: 2d618985fd8fd40f184e3fe2582b475db19241a16a1c55153dae42c9ca12e894
@@ -10,6 +10,6 @@ files:
   lib/McpPluginShim.psm1: d8bec392bd9ea0a7acc181d23f6ba852ad3ac4b4d6979c7461f01c6c06b8d941
   lib/plugin-env.ps1: 8e82c0f2fa43685b17f4ba54644a8dd5704b47ff10a11a6c24bb273d4536ee83
   lib/plugin-hook.ps1: 6668c6a48e0231abce08fbf1bb661983a566096df29c57acba25459cc6b6da3a
-  lib/repl-invoke.ps1: 10d76bc1607a081d35dcdb043012070fb2a6597e20f48d963a6f8fc7974168d9
+  lib/repl-invoke.ps1: 63f4d77713c761881811ff1159152a62eb400edef70fadd4eafebad95e430ed7
   lib/resolve-cache-dir.ps1: 5fb8fa68c9b529f1bbfa362821fd3dd92d065a0ad2a8dc19839fa5cdc30a3807
   lib/yaml-object-mutation.ps1: 1534a44b9f750ec443fe2da7c82ae0ec28650607bbc65ad4425ffeb137491ceb
