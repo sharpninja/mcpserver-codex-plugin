@@ -14,9 +14,9 @@ param(
 
     [string]$ResponsePath,
 
-    [string]$WorkspacePath = (Get-Location).ProviderPath,
+    [string]$WorkspacePath = $(if ($env:MCP_WORKSPACE_PATH) { $env:MCP_WORKSPACE_PATH } elseif ($env:MCPSERVER_WORKSPACE_PATH) { $env:MCPSERVER_WORKSPACE_PATH } elseif ($env:CODEX_WORKSPACE_PATH) { $env:CODEX_WORKSPACE_PATH } elseif ($env:CODEX_PROJECT_DIR) { $env:CODEX_PROJECT_DIR } else { (Get-Location).ProviderPath }),
 
-    [string]$PluginRoot = $PSScriptRoot,
+    [string]$PluginRoot = $(if ($env:MCP_PLUGIN_ROOT) { $env:MCP_PLUGIN_ROOT } elseif ($env:CODEX_PLUGIN_ROOT) { $env:CODEX_PLUGIN_ROOT } else { $PSScriptRoot }),
 
     [string]$CacheRoot,
 
@@ -76,7 +76,19 @@ function Invoke-PowerShellPluginScript {
     $pwsh = Resolve-PowerShellExecutable
     $pluginRootFull = Resolve-FullPath $PluginRoot
     $workspaceFull = Resolve-FullPath $WorkspacePath
-    $cacheRootFull = if ($CacheRoot) { Resolve-FullPath $CacheRoot } elseif ($env:PLUGIN_ROOT_OVERRIDE) { Resolve-FullPath $env:PLUGIN_ROOT_OVERRIDE } else { $pluginRootFull }
+    $cacheOverrideFull = if ($CacheRoot) {
+        Resolve-FullPath $CacheRoot
+    } elseif ($env:MCP_CACHE_DIR_OVERRIDE) {
+        Resolve-FullPath $env:MCP_CACHE_DIR_OVERRIDE
+    } else {
+        $null
+    }
+    $legacyCacheRootFull = if (-not $cacheOverrideFull -and $env:PLUGIN_ROOT_OVERRIDE) {
+        $legacyFull = Resolve-FullPath $env:PLUGIN_ROOT_OVERRIDE
+        if (-not [string]::Equals($legacyFull.TrimEnd('\\'), $pluginRootFull.TrimEnd('\\'), [System.StringComparison]::OrdinalIgnoreCase)) {
+            $legacyFull
+        }
+    }
 
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = $pwsh
@@ -96,9 +108,18 @@ function Invoke-PowerShellPluginScript {
         $startInfo.ArgumentList.Add($argument)
     }
     $startInfo.Environment['CODEX_PLUGIN_ROOT'] = $pluginRootFull
-    $startInfo.Environment['PLUGIN_ROOT_OVERRIDE'] = $cacheRootFull
+    $startInfo.Environment['MCP_PLUGIN_ROOT'] = $pluginRootFull
+    [void]$startInfo.Environment.Remove('MCP_CACHE_DIR_OVERRIDE')
+    [void]$startInfo.Environment.Remove('PLUGIN_ROOT_OVERRIDE')
+    if ($cacheOverrideFull) {
+        $startInfo.Environment['MCP_CACHE_DIR_OVERRIDE'] = $cacheOverrideFull
+    } elseif ($legacyCacheRootFull) {
+        $startInfo.Environment['PLUGIN_ROOT_OVERRIDE'] = $legacyCacheRootFull
+    }
     $startInfo.Environment['MCP_WORKSPACE_PATH'] = $workspaceFull
     $startInfo.Environment['MCPSERVER_WORKSPACE_PATH'] = $workspaceFull
+    $startInfo.Environment['MCP_WORKSPACE_START_DIR'] = $workspaceFull
+    $startInfo.Environment['CODEX_WORKSPACE_PATH'] = $workspaceFull
     $startInfo.Environment['MCP_PLUGIN_HOST'] = 'codex'
     $startInfo.Environment['PLUGIN_AGENT_DEFAULT'] = 'Codex'
     $startInfo.Environment['PLUGIN_MODEL_DEFAULT'] = 'codex'
