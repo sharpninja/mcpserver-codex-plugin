@@ -1,6 +1,6 @@
 {
   "name": "mcpserver",
-  "version": "1.41.0",
+  "version": "1.42.0",
   "description": "Connect OpenAI Codex CLI to McpServer for session logging, TODO management, requirements tracking, GraphRAG operations, Android device validation via adb_step, and per-turn enforcement scripts.",
   "author": {
     "name": "Payton Byrd (The Sharp Ninja)",
