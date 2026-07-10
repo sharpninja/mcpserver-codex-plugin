@@ -1,5 +1,5 @@
-coreVersion: b8fdcf30
-syncedAtUtc: 2026-07-10T22:24:15Z
+coreVersion: 678faa3a
+syncedAtUtc: 2026-07-10T23:14:01Z
 files:
   lib/cache-manager.ps1: e3bc25080de032a072b07cc1bac20214ac8eef041b557cafb781fd92010249ad
   lib/ensure-repl.ps1: 2d618985fd8fd40f184e3fe2582b475db19241a16a1c55153dae42c9ca12e894
@@ -12,5 +12,4 @@ files:
   lib/plugin-hook.ps1: 6668c6a48e0231abce08fbf1bb661983a566096df29c57acba25459cc6b6da3a
   lib/repl-invoke.ps1: 8d5d5becf0c07dd85883bd0f9324245cd79efd2831d0e9edadb7524c3950a8de
   lib/resolve-cache-dir.ps1: d39c867936e62184a71dd5490ca1a7812505476c204429edd1887241a56d573f
-  lib/transcript-ingestion.ps1: c1ded60feed066eadd90d79d86d8134fc62c6c5f2215b29bf6350c0bbdf09952
   lib/yaml-object-mutation.ps1: 1534a44b9f750ec443fe2da7c82ae0ec28650607bbc65ad4425ffeb137491ceb

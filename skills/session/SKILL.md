@@ -357,17 +357,15 @@ Where your agent's hooks or transcript integration are available, the plugin can
 
 Secret values (API keys, Bearer tokens) are redacted before logging.
 
-### Subagent Transcript Import
+### Subagent Logging
 
-When a parent session spawns subagents and the agent supports subagent transcripts, the plugin can import each subagent transcript as a first-class MCP session-log turn. Each imported subagent turn:
+Subagents are responsible for writing their own turns through the same session-log workflow. Parent or child models may include parent request IDs, agent names, and source metadata as tags or actions when those values are available, but plugin packages must not parse transcript files to populate session logs.
 
-- Gets tags `["subagent", "<nickname>"]` and optionally `["parent:<parentReqId>"]`
-- Uses a deterministic request ID: `req-<subagentStartTs>-subagent-<nickname>-<turnId>`
-- Is idempotent: a tracker file prevents re-importing the same session twice
+Manual recovery uses the normal `workflow.sessionlog.*` commands or non-plugin server-side transcript ingestion when explicitly invoked outside a plugin package. Plugins must not expose transcript ingestion helpers, skills, endpoint shortcuts, or parser forks.
 
 ### Non-Destructive Merge
 
-Server-side rich fields are never overwritten by sparse incoming values. The session payload builder uses field-level merge: an empty incoming array never replaces a non-empty server-side array. This allows `completeTurn` and `importRecovery` to be called safely after rich fields have already been captured.
+Server-side rich fields are never overwritten by sparse incoming values. The session payload builder uses field-level merge: an empty incoming array never replaces a non-empty server-side array. This allows `completeTurn` to be called safely after rich fields have already been captured.
 
 ### Secret Redaction
 
