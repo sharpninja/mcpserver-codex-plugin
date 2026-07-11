@@ -342,34 +342,29 @@ After a server restart or agent reconnect:
 3. Re-read `AGENTS-README-FIRST.yaml` for the rotated API key before making any calls
 4. Call `bootstrap` again (idempotent) then `openSession` for the new session
 
-## Rich Field Capture and Transcript Import
+## Model-Authored Session Logging
 
-Where your agent's hooks or transcript integration are available, the plugin can auto-capture rich session fields and pass them to `completeTurn`, which routes through `importRecovery` to persist them on the server. No manual steps are required when this integration is active. Captured fields include:
+Plugins do not import local chat transcripts for normal session logging. The active model must write its own session log through `workflow.sessionlog.beginTurn`, `workflow.sessionlog.appendDialog`, `workflow.sessionlog.appendActions`, and `workflow.sessionlog.completeTurn` or `workflow.sessionlog.failTurn`.
 
-- `interpretation`: first agent message from the last turn
-- `processingDialog`: all agent messages, tool calls, and observations
-- `actions`: file edits from write and patch operations
-- `filesModified`: all files changed in the turn
-- `contextList`: files read as context
-- `designDecisions`: agent messages containing `Decision:` or `Rationale:`
-- `requirementsDiscovered`: FR/TR/TEST IDs mentioned in agent messages
-- `blockers`: aborted-turn events
+### Turn Completion
 
-Secret values (API keys, Bearer tokens) are redacted before logging.
+Plugin stop/final-response helpers may complete an active turn through `lib/repl-invoke.ps1`, but the turn payload must already be model-authored through the session-log workflow. The runtime builds request envelopes with PowerShell objects and serializers. Secret values (API keys, Bearer tokens) are redacted before logging.
 
 ### Subagent Logging
 
 Subagents are responsible for writing their own turns through the same session-log workflow. Parent or child models may include parent request IDs, agent names, and source metadata as tags or actions when those values are available, but plugin packages must not parse transcript files to populate session logs.
 
+### Manual Recovery
+
 Manual recovery uses the normal `workflow.sessionlog.*` commands or non-plugin server-side transcript ingestion when explicitly invoked outside a plugin package. Plugins must not expose transcript ingestion helpers, skills, endpoint shortcuts, or parser forks.
 
 ### Non-Destructive Merge
 
-Server-side rich fields are never overwritten by sparse incoming values. The session payload builder uses field-level merge: an empty incoming array never replaces a non-empty server-side array. This allows `completeTurn` to be called safely after rich fields have already been captured.
+Server-side rich fields are never overwritten by sparse incoming values. The PowerShell session payload builder uses field-level merge: an empty incoming array never replaces a non-empty server-side array. This allows model-authored `completeTurn` calls to close turns safely after rich fields have already been captured through the session-log workflow.
 
 ### Secret Redaction
 
-The following patterns are redacted from all extracted text before logging:
+The following patterns are redacted from model-authored session-log text before logging:
 
 - `X-Api-Key:` header values
 - `apiKey:` parameter values (20+ character strings)
