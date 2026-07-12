@@ -1,15 +1,15 @@
-coreVersion: f0d8a653
-syncedAtUtc: 2026-07-12T07:27:33Z
+coreVersion: f2d83fdc
+syncedAtUtc: 2026-07-12T08:12:09Z
 files:
   lib/cache-manager.ps1: 640b715e4ffd65349bda2e02f941f28ce42cb6d6be7d05751a9df7e3b9c13b8b
   lib/ensure-repl.ps1: 2d618985fd8fd40f184e3fe2582b475db19241a16a1c55153dae42c9ca12e894
   lib/final-response.ps1: a8574560aece09b89a208b0d4cdea36314b71aed8aa4620a937704ae9134e998
-  lib/Invoke-McpPlugin.ps1: d359fae36767845b763fdf3b7a7dff140b1f9faa63126688f20b7d90104f2800
+  lib/Invoke-McpPlugin.ps1: da5d0727e2b8981656e3bb108b1909752c6dda387f9896bc9c76325879ebcbf1
   lib/marker-resolver.ps1: 78deb0df7e8bcc9832f3acfad7fef9eae41235f82e082f9a1a029f624a1bfb24
   lib/mcp-status.ps1: 3d83c638487e6b0d0074e8863f3fd9b192e7fadd236041756978e9761c0efdb6
   lib/McpPluginShim.psm1: 5a3ea1da1dfe98497cce68bce07492a32f0679cde87f11647e956c50d98a7d61
-  lib/plugin-env.ps1: 788dfa979c0f7f9da6433561133808833c742688a3c30b5baddbe429e3cec196
-  lib/plugin-hook.ps1: f4b13c7e215db1429708bddbdac7a03b6de103a836d95d5034aa8f8caaeebae4
-  lib/repl-invoke.ps1: acc4e003be2dd9d1e8f571a817e4058f07eb29208ff81d1e18285f8b5ebcd55b
-  lib/resolve-cache-dir.ps1: d39c867936e62184a71dd5490ca1a7812505476c204429edd1887241a56d573f
+  lib/plugin-env.ps1: 40dd9a09594b43b17a23e41537dfcd0ab62551b33f7827926e0f080cc3e4ab8a
+  lib/plugin-hook.ps1: 199fe6fd98a55c06639e0cccda3ab599b116dc69cec7c43c2af598c6ee700227
+  lib/repl-invoke.ps1: 124a3d5004efe1354911294028eb1c4c19d66b5465510147a62feb458f4d2294
+  lib/resolve-cache-dir.ps1: 8f33bee75cd5f486376e032af95cfd518c15262209c381a433fca9cd5d5203a2
   lib/yaml-object-mutation.ps1: 39247da737c8696232b8dd14a96f7a69c5cf1839bede213af0e624972c15ad0a
