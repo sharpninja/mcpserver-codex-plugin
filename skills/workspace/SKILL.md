@@ -30,15 +30,14 @@ If the target workspace has no marker or the marker is untrusted, use another tr
 
 ## PowerShell Plugin Example
 
-Run plugin execution in PowerShell 7+ (`pwsh`). Point the plugin root at the active plugin's install directory; the wrapper reads `PLUGIN_ROOT_OVERRIDE`.
+Run plugin execution in PowerShell 7+ (`pwsh`). Point `MCP_PLUGIN_ROOT` at the active plugin install directory; set `MCP_CACHE_DIR_OVERRIDE` only for an explicit cache override.
 
 ```powershell
 cd F:\GitHub\McpServer
-$env:PLUGIN_ROOT = 'F:\GitHub\mcpserver-<agent>-plugin'   # the active plugin's install root
-$env:PLUGIN_ROOT_OVERRIDE = $env:PLUGIN_ROOT
-. "$env:PLUGIN_ROOT\lib\marker-resolver.ps1"
+$env:MCP_PLUGIN_ROOT = 'F:\GitHub\mcpserver-<agent>-plugin'   # the active plugin's install root
+. "$env:MCP_PLUGIN_ROOT\lib\marker-resolver.ps1"
 full_bootstrap F:\GitHub\McpServer
-. "$env:PLUGIN_ROOT\lib\repl-invoke.ps1"
+. "$env:MCP_PLUGIN_ROOT\lib\repl-invoke.ps1"
 Invoke-McpPlugin.ps1 "client.Workspace.ListAsync" ""
 ```
 
