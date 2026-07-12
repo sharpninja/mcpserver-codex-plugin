@@ -10,6 +10,8 @@ param(
 
     [string]$ParamsPath,
 
+    [object]$ParamsObject,
+
     [string]$Response,
 
     [string]$ResponsePath,
@@ -183,6 +185,18 @@ function Invoke-PowerShellPluginScript {
 
 $pluginRootFull = Resolve-FullPath $PluginRoot
 
+$paramsObjectBound = $PSBoundParameters.ContainsKey('ParamsObject')
+if ($paramsObjectBound -and ($PSBoundParameters.ContainsKey('Params') -or $PSBoundParameters.ContainsKey('ParamsPath'))) {
+    throw '-ParamsObject cannot be combined with -Params or -ParamsPath.'
+}
+
+$paramsFromObject = ''
+if ($paramsObjectBound) {
+    . (Join-Path $pluginRootFull 'lib\yaml-object-mutation.ps1')
+    Import-McpYamlSerializer
+    $paramsFromObject = ConvertTo-Yaml -Data $ParamsObject -Options WithIndentedSequences
+}
+
 switch ($Command) {
     'Status' {
         Invoke-PowerShellPluginScript -ScriptPath (Join-Path $pluginRootFull 'lib\mcp-status.ps1')
@@ -192,7 +206,11 @@ switch ($Command) {
             throw '-Method is required when -Command Invoke is used.'
         }
 
-        $paramsText = Read-OptionalText -Inline $Params -HasInline:$($PSBoundParameters.ContainsKey('Params')) -Path $ParamsPath
+        $paramsText = if ($paramsObjectBound) {
+            $paramsFromObject
+        } else {
+            Read-OptionalText -Inline $Params -HasInline:$($PSBoundParameters.ContainsKey('Params')) -Path $ParamsPath
+        }
 
         Invoke-PowerShellPluginScript -ScriptPath (Join-Path $pluginRootFull 'lib\repl-invoke.ps1') -Arguments @('-Method', $Method, '-ParamsYaml', ($paramsText ?? ''))
     }

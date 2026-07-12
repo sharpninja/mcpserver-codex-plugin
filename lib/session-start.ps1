@@ -1,6 +1,13 @@
 #Requires -Version 7.0
 [CmdletBinding()]
 param(
+    [string]$Params,
+
+    [string]$ParamsPath,
+
+    [Parameter(ValueFromPipeline = $true)]
+    [object]$InputObject,
+
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$RemainingArguments
 )
@@ -13,7 +20,24 @@ $pluginRoot = (Resolve-Path -LiteralPath (Join-Path $scriptDir '..')).ProviderPa
 $env:MCP_PLUGIN_ROOT = $pluginRoot
 $env:MCP_PLUGIN_HOST = 'codex'
 
-& (Join-Path $pluginRoot 'lib\plugin-hook.ps1') -HookName 'session-start' -HostName 'codex' -CacheMode 'flat' @RemainingArguments
+$hookParams = $Params
+if (-not $hookParams -and $null -ne $InputObject) {
+    if ($InputObject -is [string]) {
+        $hookParams = [string]$InputObject
+    } else {
+        $hookParams = $InputObject | ConvertTo-Json -Depth 20 -Compress
+    }
+}
+
+$hookArguments = @{
+    HookName = 'session-start'
+    HostName = 'codex'
+    CacheMode = 'flat'
+}
+if ($hookParams) { $hookArguments.Params = $hookParams }
+if ($ParamsPath) { $hookArguments.ParamsPath = $ParamsPath }
+
+& (Join-Path $pluginRoot 'lib\plugin-hook.ps1') @hookArguments @RemainingArguments
 if (Get-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue) {
     exit $global:LASTEXITCODE
 }

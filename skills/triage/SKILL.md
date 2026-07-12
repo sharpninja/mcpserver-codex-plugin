@@ -15,7 +15,7 @@ MCP Server-related reports, including MCP Server plugin bugs, are grouped into t
 ## Tools
 
 - Use `triage_report` to submit an incidental bug report.
-- Use `triage_status` to inspect a report or group later.
+- Native MCP clients may use `triage_status`; plugin/REPL callers must use schema-valid `workflow.triage.getReport`, `workflow.triage.getGroup`, or `workflow.triage.queryGroups` for status inspection.
 
 ## Report Shape
 
@@ -48,3 +48,21 @@ payload:
 ```
 
 After a successful response, record the returned `reportId`, `groupId`, `status`, and `quietDeadlineUtc` only if useful for the current audit trail, then continue the current task.
+
+## PowerShell Object-Safe Example
+
+When using the plugin PowerShell surface, prefer the exported shim helpers and `-ParamsObject` so the wrapper serializes the YAML payload:
+
+```powershell
+Import-Module (Join-Path $env:MCP_PLUGIN_ROOT 'lib/McpPluginShim.psm1') -Force
+$params = New-McpTriageReportParams `
+    -Title 'Plugin wrapper hides triage validation errors' `
+    -Summary 'workflow.triage.report failures are not visible to the agent.' `
+    -Component 'mcpserver-plugin' `
+    -AffectedPaths @('lib/repl-invoke.ps1') `
+    -ErrorSignature 'triage_validation_hidden' `
+    -ReporterAgent '<your-agent>'
+& (Join-Path $env:MCP_PLUGIN_ROOT 'lib/Invoke-McpPlugin.ps1') -Command Invoke -Method workflow.triage.report -ParamsObject $params
+```
+
+Use `New-McpTriageGetReportParams`, `New-McpTriageGetGroupParams`, and `New-McpTriageQueryGroupsParams` for object-safe status inspection through `workflow.triage.getReport`, `workflow.triage.getGroup`, and `workflow.triage.queryGroups`.

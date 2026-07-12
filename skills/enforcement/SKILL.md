@@ -35,8 +35,7 @@ The script:
   `lastBuildStatus: unknown`, `status: in_progress`
 - Emits a reminder via `additionalContext` that Phases 2 and 3 are mandatory
 
-If the script output `status: no-session`, MCP is unavailable; continue best-effort
-without session logging, but still fulfill the user request.
+If the script outputs `status: no-session`, do not treat that as a final best-effort state. The hook has already health-checked the marker, attempts session creation when the marker timestamp changes, submits triage if creation fails after a healthy bootstrap, and records degraded recovery state under the failsafe path. Continue the user request, but preserve the `recoveryStatus`, `healthStatus`, and `failsafePath` receipt as evidence; retry session creation only after `AGENTS-README-FIRST.yaml` is rewritten or the hook reports recovery.
 
 ## Phase 2 — After Every Code Edit
 
