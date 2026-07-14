@@ -47,9 +47,11 @@ $script:ReplInvokePluginRoot = if ($env:MCP_PLUGIN_ROOT) {
 }
 
 # Agent for per-agent REPL cache and isolation. Must be passed to every mcpserver-repl call.
+# Keep this precedence aligned with the shell resolve-cache-dir counterpart and MarkerFileClientOptionsResolver.ResolveAgentKey.
 $script:AgentName = if ($env:MCP_AGENT_NAME) { $env:MCP_AGENT_NAME }
                    elseif ($env:PLUGIN_AGENT_NAME) { $env:PLUGIN_AGENT_NAME }
                    elseif ($env:PLUGIN_AGENT_DEFAULT) { $env:PLUGIN_AGENT_DEFAULT }
+                   elseif ($env:MCP_PLUGIN_HOST) { $env:MCP_PLUGIN_HOST }
                    else { 'default' }
 
 if (-not (Get-Command Resolve-McpCacheDir -ErrorAction SilentlyContinue)) {
@@ -72,23 +74,44 @@ function New-ReplPluginSessionId {
 
 
 function Resolve-ReplWorkspaceDirectory {
+    # A marker-bearing current directory outranks the workspace env vars: ambient
+    # MCP_WORKSPACE_PATH values leak across workspaces through host processes and
+    # persistent consoles, and an inherited value must not re-bind marker trust,
+    # API keys, and session logs to another workspace while the cache directory
+    # stays local (triage-report-7c84e6437f7b42d0a67fbe32679a686a). This matches
+    # the plugin hook's Get-PluginStartPath precedence.
+    $providerLocation = $null
+    try {
+        $location = Get-Location
+        if ($location.Provider.Name -eq 'FileSystem') {
+            $providerLocation = $location.ProviderPath
+        }
+    } catch {
+        # Fall through to the env and .NET current directory fallbacks.
+    }
+
+    # Only the PowerShell provider location is trusted for the marker check: the
+    # process-wide [Environment]::CurrentDirectory can be stale in shared hosts.
+    if (-not [string]::IsNullOrWhiteSpace($providerLocation) -and
+        (Test-Path -LiteralPath $providerLocation -PathType Container)) {
+        try {
+            if ((Get-Command Find-MarkerFile -ErrorAction SilentlyContinue) -and
+                (Find-MarkerFile -StartDir $providerLocation)) {
+                return (Resolve-Path -LiteralPath $providerLocation).ProviderPath
+            }
+        } catch {
+            # No marker above the current directory; consult the env fallbacks below.
+        }
+    }
+
     $candidates = @(
         $env:MCP_WORKSPACE_PATH,
         $env:MCPSERVER_WORKSPACE_PATH,
         $env:MCP_WORKSPACE_START_DIR,
-        $env:CLAUDE_PROJECT_DIR
+        $env:CLAUDE_PROJECT_DIR,
+        $providerLocation,
+        [Environment]::CurrentDirectory
     )
-
-    try {
-        $location = Get-Location
-        if ($location.Provider.Name -eq 'FileSystem') {
-            $candidates += $location.ProviderPath
-        }
-    } catch {
-        # Fall through to the .NET current directory fallback.
-    }
-
-    $candidates += [Environment]::CurrentDirectory
 
     foreach ($candidate in $candidates) {
         if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
@@ -400,10 +423,8 @@ function Invoke-ReplRaw {
         $psi = [System.Diagnostics.ProcessStartInfo]::new()
         $psi.FileName = 'mcpserver-repl'
         $psi.ArgumentList.Add('--agent-stdio')
-        if ($script:AgentName -and $script:AgentName -ne 'default') {
-            $psi.ArgumentList.Add('--agent')
-            $psi.ArgumentList.Add($script:AgentName)
-        }
+        $psi.ArgumentList.Add('--agent')
+        $psi.ArgumentList.Add($script:AgentName)
         $psi.RedirectStandardInput = $true
         $psi.RedirectStandardOutput = $true
         # Do NOT redirect stderr: mcpserver-repl logs verbose 'info:' lines
