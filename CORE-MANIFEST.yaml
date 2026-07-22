@@ -1,6 +1,7 @@
-coreVersion: 0c7844fc
-syncedAtUtc: 2026-07-22T23:25:42Z
+coreVersion: 481d337e
+syncedAtUtc: 2026-07-22T23:53:56Z
 files:
+  lib/agent-runtime-header.ps1: 356b02dae117d4ab59388f9eabafa78ee55489bebed2767456136071f0589b5c
   lib/cache-manager.ps1: 640b715e4ffd65349bda2e02f941f28ce42cb6d6be7d05751a9df7e3b9c13b8b
   lib/ensure-repl.ps1: 2d618985fd8fd40f184e3fe2582b475db19241a16a1c55153dae42c9ca12e894
   lib/final-response.ps1: a8574560aece09b89a208b0d4cdea36314b71aed8aa4620a937704ae9134e998
@@ -9,7 +10,7 @@ files:
   lib/mcp-status.ps1: 914d3d8ce13227220e641cdf2ee814fa800b7efc571a51b4b694d04ff4df7f6c
   lib/McpPluginShim.psm1: 32b86fae0c6dc08da85f7f86446646e0b1787a48d74153c322b47bf3c57e9a50
   lib/plugin-env.ps1: 40dd9a09594b43b17a23e41537dfcd0ab62551b33f7827926e0f080cc3e4ab8a
-  lib/plugin-hook.ps1: f2006d592ed74fa99b302cf5833d95a73e24a50b7f32ee00833510e6b1afa178
-  lib/repl-invoke.ps1: 7ce662ba5eb8694ae4cc7ed8b04116c6c0d3f70a4c4c017940f46001a8fc459f
+  lib/plugin-hook.ps1: ed3db2d130890faa4e1b6d4a26196975d8f81e891de072069be4cb7a11901946
+  lib/repl-invoke.ps1: 5f87b4ecf91ffdc7ffb62dd3d200875a8c86a9c33e97768906f2481663875a00
   lib/resolve-cache-dir.ps1: 1c04485ad6b00900cea30555a4fb91a182fcc6afd381b38ac6b106dbeb27d378
   lib/yaml-object-mutation.ps1: 39247da737c8696232b8dd14a96f7a69c5cf1839bede213af0e624972c15ad0a
