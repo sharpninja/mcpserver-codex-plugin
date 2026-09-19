@@ -1,4 +1,5 @@
 lib/code-verify.ps1
+lib/memory-context.ps1
 lib/session-start.ps1
 lib/stop-gate.ps1
 lib/subagent-import.ps1
