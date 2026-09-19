@@ -29,3 +29,10 @@ Avoid:
 - broad context reads before checking session state
 - asking the user to manually test when `adb_step` can perform the validation
 - reading large log histories when a recent checkpoint or delta would suffice
+
+## External research
+
+- Before planning or substantive documentation that depends on external facts, follow `docs/research/perplexity-research-policy.md` and `docs/research/research-to-plan-workflow.md`.
+- Prefer Perplexity when available; record source URLs; separate facts from assumptions.
+- Do not modify implementation code until the written plan is reviewed and approved.
+- This plugin does not require `PERPLEXITY_API_KEY` for ordinary tool execution.
