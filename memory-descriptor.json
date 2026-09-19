@@ -20,5 +20,18 @@
     "memory_list",
     "memory_update",
     "memory_remove"
-  ]
+  ],
+  "workflowMethods": {
+    "memory_remember": "workflow.memory.remember",
+    "memory_recall": "workflow.memory.recall",
+    "memory_explore": "workflow.memory.explore",
+    "memory_consolidate": "workflow.memory.consolidate",
+    "memory_promote": "workflow.memory.promote",
+    "memory_revert": "workflow.memory.revert",
+    "memory_add": "workflow.memory.add",
+    "memory_list": "workflow.memory.list",
+    "memory_get": "workflow.memory.get",
+    "memory_update": "workflow.memory.update",
+    "memory_remove": "workflow.memory.remove"
+  }
 }

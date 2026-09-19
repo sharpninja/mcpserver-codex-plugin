@@ -125,9 +125,33 @@ if ('user-prompt-submit' -eq 'code-verify') {
     exit $process.ExitCode
 }
 
-& $hookScript @hookArguments @RemainingArguments
-if (Get-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue) {
-    exit $global:LASTEXITCODE
+$hookOutput = @()
+$hookExit = 0
+try {
+    $hookOutput = @(& $hookScript @hookArguments @RemainingArguments)
+    if (Get-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue) {
+        if ($null -ne $global:LASTEXITCODE) {
+            $hookExit = [int]$global:LASTEXITCODE
+        }
+    }
+} catch {
+    [Console]::Error.WriteLine("user-prompt-submit hook failed: $($_.Exception.Message)")
+    $hookExit = 0
 }
 
-exit 0
+$mergedOutput = ($hookOutput | Out-String).TrimEnd()
+try {
+    $memoryContextScript = Join-Path $scriptDir 'memory-context.ps1'
+    if (Test-Path -LiteralPath $memoryContextScript -PathType Leaf) {
+        . $memoryContextScript
+        $mergedOutput = Add-McpRequiredMemoryToHookOutput -HookOutput $mergedOutput -PluginRoot $pluginRoot
+    }
+} catch {
+    [Console]::Error.WriteLine("required-memory injection skipped: $($_.Exception.Message)")
+}
+
+if (-not [string]::IsNullOrWhiteSpace($mergedOutput)) {
+    Write-Output $mergedOutput
+}
+
+exit $hookExit
