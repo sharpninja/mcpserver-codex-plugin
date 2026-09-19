@@ -109,3 +109,16 @@ Before ending significant work:
 - This workspace supports Codex/MCP plugin continuity. Preserve session/bootstrap behavior when editing scripts or prompts.
 - Verify staged-copy and live-plugin behavior when the change affects startup, handoff, or session logging.
 - If no local marker exists, use the McpServer workspace contract as the continuity baseline and do not invent marker presence.
+
+## External research (Perplexity)
+
+Before planning or making substantive documentation changes that depend on external facts, use Perplexity research when available. Prefer official sources. Record sources and distinguish verified facts from assumptions. Do not modify implementation code until the plan has been reviewed and explicitly approved.
+
+Canonical policy: `docs/research/perplexity-research-policy.md`  
+Workflow: `docs/research/research-to-plan-workflow.md`
+
+If Perplexity is unavailable, use the documented fallback and label the result:
+
+`Research provider: Perplexity unavailable — fallback process used.`
+
+This plugin does **not** require `PERPLEXITY_API_KEY` for installation or ordinary McpServer tool execution. Connect Perplexity MCP (or `pplx`) in the host agent client when you want live research.
