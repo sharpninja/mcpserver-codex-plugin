@@ -104,6 +104,26 @@ payload:
         $errorWriter.ToString() | Should -Match 'degraded'
         $errorWriter.ToString() | Should -Match 'C:\\failsafe\\turn\.yaml'
     }
+
+    It 'retains query text and turn metadata when beginTurn is queued' {
+        . (Join-Path $PSScriptRoot '..\lib\repl-invoke.ps1')
+        function Invoke-ReplPersistTurn {
+            param([string]$RequestId, [string]$Title, [string]$Status, [string]$ResponseText, [switch]$IncludeSessionTitle, [string]$PlanFile, [string]$TodoId)
+            $script:LastReplPersistenceDetails = @{ degraded = $true; failsafePath = $script:FailsafeDir }
+            return $false
+        }
+
+        $params = [ordered]@{ requestId = 'req-20260709T000001Z-prompt-0001'; queryTitle = 'Retest control transfer'; queryText = 'test' } | ConvertTo-Yaml
+        $result = Invoke-WorkflowBeginTurn -ParamsYaml $params
+        $state = Read-McpYamlObject -Path (Join-Path $script:TestRoot 'current-turn.yaml')
+
+        $result | Should -BeTrue
+        $state['queryText'] | Should -Be 'test'
+        $state['queryTitle'] | Should -Be 'Retest control transfer'
+        $state['openedAt'] | Should -Not -BeNullOrEmpty
+        $state['status'] | Should -Be 'in_progress'
+        $state['sessionId'] | Should -Be 'TestAgent-20260709T000000Z-plugin-session'
+    }
 }
 
 $env:MCP_CACHE_DIR_OVERRIDE = $script:OriginalCacheOverride

@@ -17,6 +17,13 @@ function Get-McpCacheAgentKey {
     [CmdletBinding()]
     param()
 
+    # FR-MCP-SESSIONLIFE-002: inherited Grok variables must not move a Codex
+    # plugin into the Grok cache namespace.
+    $inheritedAgent = @($env:PLUGIN_AGENT_NAME, $env:MCP_AGENT_NAME) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1
+    if ($env:MCP_PLUGIN_HOST -match '^(?i:codex)$' -and $inheritedAgent -match '(?i)grok') {
+        return 'codex'
+    }
+
     $agent = @(
         $env:MCP_AGENT_NAME,
         $env:PLUGIN_AGENT_NAME,
@@ -94,14 +101,20 @@ function Resolve-McpCacheDir {
         }
     }
 
+    $explicitWorkspace = @(
+        $env:MCP_WORKSPACE_PATH,
+        $env:MCPSERVER_WORKSPACE_PATH,
+        $env:CLAUDE_PROJECT_DIR
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and (Test-Path -LiteralPath $_ -PathType Container) } | Select-Object -First 1
+
+    if ([string]::IsNullOrWhiteSpace($StartPath) -and $explicitWorkspace) {
+        return (Join-McpWorkspaceCachePath -WorkspacePath ((Resolve-Path -LiteralPath $explicitWorkspace).ProviderPath))
+    }
+
     $startCandidates = if (-not [string]::IsNullOrWhiteSpace($StartPath)) {
         @($StartPath)
     } else {
         @(
-            $env:MCP_WORKSPACE_START_DIR,
-            $env:MCP_WORKSPACE_PATH,
-            $env:MCPSERVER_WORKSPACE_PATH,
-            $env:CLAUDE_PROJECT_DIR,
             $env:CODEX_CWD,
             (Get-Location).Path
         ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
@@ -158,12 +171,17 @@ function Get-McpFailsafeAgentSegment {
     [CmdletBinding()]
     param()
 
-    $agent = @(
-        $env:PLUGIN_AGENT_NAME,
-        $env:MCP_AGENT_NAME,
-        $env:PLUGIN_AGENT_DEFAULT,
-        $env:MCP_PLUGIN_HOST
-    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1
+    $inheritedAgent = @($env:PLUGIN_AGENT_NAME, $env:MCP_AGENT_NAME) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1
+    if ($env:MCP_PLUGIN_HOST -match '^(?i:codex)$' -and $inheritedAgent -match 'grok') {
+        $agent = 'Codex'
+    } else {
+        $agent = @(
+            $env:PLUGIN_AGENT_NAME,
+            $env:MCP_AGENT_NAME,
+            $env:PLUGIN_AGENT_DEFAULT,
+            $env:MCP_PLUGIN_HOST
+        ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1
+    }
 
     if (-not $agent) {
         return (Get-McpCacheAgentKey)
@@ -304,7 +322,23 @@ function Get-McpFailsafeDir {
     if ($env:MCPSERVER_FAILSAFE_DIR) { return $env:MCPSERVER_FAILSAFE_DIR }
     if ($env:MCP_FAILSAFE_DIR) { return $env:MCP_FAILSAFE_DIR }
 
-    $workspace = Resolve-McpFailsafeWorkspacePath -StartPath $StartPath
+    # FR-MCP-SESSIONLIFE-003: a cache override is the supported markerless
+    # recovery target. Keep the write-ahead queue beside it when no workspace
+    # root can be resolved, so title and submit calls are not reported lost
+    # before the server is attempted. An explicit failsafe override above
+    # still wins, including a non-directory used to prove a lost write.
+    try {
+        $workspace = Resolve-McpFailsafeWorkspacePath -StartPath $StartPath
+    } catch {
+        $override = $env:MCP_CACHE_DIR_OVERRIDE
+        if ($override -and (Test-Path -LiteralPath $override -PathType Container)) {
+            $overridePending = Join-Path $override 'failsafe-pending'
+            [void][System.IO.Directory]::CreateDirectory($overridePending)
+            return $overridePending
+        }
+
+        throw
+    }
     $agent = Get-McpFailsafeAgentSegment
     $key = Get-McpFailsafeWorkspaceKey -WorkspacePath $workspace
     $pending = Join-Path $workspace (Join-Path '.mcpServer' (Join-Path 'failsafe' (Join-Path $agent (Join-Path 'workspaces' (Join-Path $key 'pending')))))

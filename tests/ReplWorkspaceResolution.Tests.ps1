@@ -22,9 +22,12 @@ Describe 'Resolve-ReplWorkspaceDirectory precedence' {
         }
 
         $script:SavedLocation = (Get-Location).Path
-        $script:WorkspaceA = Join-Path $env:TEMP ('mcp-ws-a-' + [guid]::NewGuid().ToString('N'))
-        $script:WorkspaceB = Join-Path $env:TEMP ('mcp-ws-b-' + [guid]::NewGuid().ToString('N'))
-        $script:MarkerlessDir = Join-Path $env:TEMP ('mcp-ws-none-' + [guid]::NewGuid().ToString('N'))
+        # Keep these fixtures outside the repository even when TEMP was redirected
+        # under .mcpServer/tmp by an earlier test in this Pester process.
+        $script:FixtureRoot = [Environment]::GetFolderPath('UserProfile')
+        $script:WorkspaceA = Join-Path $script:FixtureRoot ('mcp-ws-a-' + [guid]::NewGuid().ToString('N'))
+        $script:WorkspaceB = Join-Path $script:FixtureRoot ('mcp-ws-b-' + [guid]::NewGuid().ToString('N'))
+        $script:MarkerlessDir = Join-Path $script:FixtureRoot ('mcp-ws-none-' + [guid]::NewGuid().ToString('N'))
         foreach ($dir in @($script:WorkspaceA, $script:WorkspaceB, $script:MarkerlessDir)) {
             [void][System.IO.Directory]::CreateDirectory($dir)
         }
@@ -41,9 +44,14 @@ Describe 'Resolve-ReplWorkspaceDirectory precedence' {
                 Remove-Item -LiteralPath "Env:$($pair.Key)" -ErrorAction SilentlyContinue
             }
         }
+        $fixturePrefix = [IO.Path]::GetFullPath($script:FixtureRoot) + [IO.Path]::DirectorySeparatorChar
         foreach ($dir in @($script:WorkspaceA, $script:WorkspaceB, $script:MarkerlessDir)) {
-            if (Test-Path -LiteralPath $dir) {
-                Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+            $target = [IO.Path]::GetFullPath($dir)
+            if (-not $target.StartsWith($fixturePrefix, [StringComparison]::OrdinalIgnoreCase)) {
+                throw "Fixture cleanup target escaped the user profile: $target"
+            }
+            if (Test-Path -LiteralPath $target) {
+                Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction SilentlyContinue
             }
         }
     }

@@ -813,13 +813,23 @@ function Open-PluginTurn {
                 -not [string]::IsNullOrWhiteSpace($openRequestId) -and
                 $openedRecently -and
                 $openQuery.Trim() -eq $prompt.Trim()) {
-                Write-PluginJson ([ordered]@{
-                    hookSpecificOutput = [ordered]@{
-                        hookEventName = 'UserPromptSubmit'
-                        status = 'turn-already-open'
-                        turnRequestId = $openRequestId
-                        additionalContext = "session log turn $openRequestId is now active. Continue the current task after any incidental triage submission."
+                $dupDegraded = if ($openTurn.Contains('degraded')) { [string]$openTurn['degraded'] } else { '' }
+                $dupFailsafe = if ($openTurn.Contains('failsafePath')) { [string]$openTurn['failsafePath'] } else { '' }
+                $dupOut = [ordered]@{
+                    hookEventName = 'UserPromptSubmit'
+                    status = 'turn-already-open'
+                    turnRequestId = $openRequestId
+                    additionalContext = "session log turn $openRequestId is now active. Continue the current task after any incidental triage submission."
+                }
+                if ($dupDegraded -match '^(?i:true|1)$') {
+                    $dupOut['degraded'] = $true
+                    if (-not [string]::IsNullOrWhiteSpace($dupFailsafe)) {
+                        $dupOut['recoveryArtifactPath'] = $dupFailsafe
+                        $dupOut['additionalContext'] = "$($dupOut.additionalContext) Retained recovery artifact: $dupFailsafe"
                     }
+                }
+                Write-PluginJson ([ordered]@{
+                    hookSpecificOutput = $dupOut
                 })
                 return
             }
@@ -900,17 +910,29 @@ function Open-PluginTurn {
         return
     }
 
+    $turnDoc = Read-McpYamlObject -Path $turnFile -Create
+    $degradedFlag = if ($turnDoc.Contains('degraded')) { [string]$turnDoc['degraded'] } else { '' }
+    $recoveryArtifactPath = if ($turnDoc.Contains('failsafePath')) { [string]$turnDoc['failsafePath'] } else { '' }
+    $openStatus = if ($degradedFlag -eq 'true') { 'turn-opened-degraded' } else { 'turn-opened' }
+    $additionalContext = if ($env:MCP_CODEX_INTERNAL_TODO -eq '1' -or $env:MCPSERVER_CODEX_INTERNAL_TODO -eq '1' -or $env:CODEX_MCP_TODO -eq '1') {
+        "session log turn $turnRequestId is now active. MCP-backed internal TODO tracking is enabled. Continue the current task after any incidental triage submission."
+    } else {
+        "session log turn $turnRequestId is now active. Continue the current task after any incidental triage submission."
+    }
+    if ($openStatus -eq 'turn-opened-degraded' -and -not [string]::IsNullOrWhiteSpace($recoveryArtifactPath)) {
+        $additionalContext = "$additionalContext Retained recovery artifact: $recoveryArtifactPath"
+    }
+    $hookOutput = [ordered]@{
+        hookEventName = 'UserPromptSubmit'
+        status = $openStatus
+        turnRequestId = $turnRequestId
+        additionalContext = $additionalContext
+    }
+    if ($openStatus -eq 'turn-opened-degraded') {
+        $hookOutput['recoveryArtifactPath'] = [string]$recoveryArtifactPath
+    }
     Write-PluginJson ([ordered]@{
-        hookSpecificOutput = [ordered]@{
-            hookEventName = 'UserPromptSubmit'
-            status = 'turn-opened'
-            turnRequestId = $turnRequestId
-            additionalContext = if ($env:MCP_CODEX_INTERNAL_TODO -eq '1' -or $env:MCPSERVER_CODEX_INTERNAL_TODO -eq '1' -or $env:CODEX_MCP_TODO -eq '1') {
-                "session log turn $turnRequestId is now active. MCP-backed internal TODO tracking is enabled. Continue the current task after any incidental triage submission."
-            } else {
-                "session log turn $turnRequestId is now active. Continue the current task after any incidental triage submission."
-            }
-        }
+        hookSpecificOutput = $hookOutput
     })
 }
 
@@ -925,24 +947,45 @@ function Close-PluginTurnIfNeeded {
     }
 
     $sessionFile = Join-Path $cacheDir 'session-state.yaml'
+    $sessionAgeStale = $false
     if (Test-Path -LiteralPath $sessionFile) {
+        $cutoff = (Get-Date).ToUniversalTime().AddHours(-24)
         $timestampText = Get-YamlScalar -Path $sessionFile -Key 'timestamp'
-        if (-not $timestampText) { $timestampText = Get-YamlScalar -Path $sessionFile -Key 'lastUpdated' }
+        $updatedText = Get-YamlScalar -Path $sessionFile -Key 'lastUpdated'
+        $timestampStale = $false
+        $updatedStale = $true
+        $parsedTimestamp = [datetime]::MinValue
+        if ($timestampText -and [datetime]::TryParse($timestampText.Trim('"'), [ref]$parsedTimestamp)) {
+            $timestampStale = $parsedTimestamp.ToUniversalTime() -lt $cutoff
+        }
+        $parsedUpdated = [datetime]::MinValue
+        if ($updatedText -and [datetime]::TryParse($updatedText.Trim('"'), [ref]$parsedUpdated)) {
+            $updatedStale = $parsedUpdated.ToUniversalTime() -lt $cutoff
+        }
+        # A fresh lastUpdated does not clear a stale timestamp pin.
         if ($timestampText) {
-            $parsedTimestamp = [datetime]::MinValue
-            if ([datetime]::TryParse($timestampText.Trim('"'), [ref]$parsedTimestamp)) {
-                if ($parsedTimestamp.ToUniversalTime() -lt (Get-Date).ToUniversalTime().AddHours(-24)) {
-                    $requestId = if (Test-Path -LiteralPath $turnFile) { Get-YamlScalar -Path $turnFile -Key 'turnRequestId' } else { '' }
-                    Write-PluginJson ([ordered]@{ decision = 'block'; reason = "stale cached session cannot be reused for $requestId" })
-                    return
-                }
-            }
+            $sessionAgeStale = $timestampStale
+        } else {
+            $sessionAgeStale = $updatedStale
         }
     }
 
     if (-not (Test-Path -LiteralPath $turnFile)) {
+        if ($sessionAgeStale -and (Test-Path -LiteralPath $sessionFile)) {
+            Set-YamlScalar -Path $sessionFile -Key 'lastUpdated' -Value ((Get-Date).ToUniversalTime().ToString('o'))
+        }
         Write-PluginJson ([ordered]@{})
         return
+    }
+
+    $status = Get-YamlScalar -Path $turnFile -Key 'status'
+    if ($sessionAgeStale -and $status -eq 'in_progress') {
+        $requestId = Get-YamlScalar -Path $turnFile -Key 'turnRequestId'
+        Write-PluginJson ([ordered]@{ decision = 'block'; reason = "stale cached session cannot be reused for $requestId" })
+        return
+    }
+    if ($sessionAgeStale -and (Test-Path -LiteralPath $sessionFile)) {
+        Set-YamlScalar -Path $sessionFile -Key 'lastUpdated' -Value ((Get-Date).ToUniversalTime().ToString('o'))
     }
 
     $status = Get-YamlScalar -Path $turnFile -Key 'status'
