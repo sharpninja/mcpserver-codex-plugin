@@ -1,9 +1,10 @@
 $ErrorActionPreference = 'Stop'
 
+if (Get-Command qbrain-ai-repl -ErrorAction SilentlyContinue) { exit 0 }
 if (Get-Command mcpserver-repl -ErrorAction SilentlyContinue) { exit 0 }
 
 if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
-    Write-Error "gh CLI not found. Install GitHub CLI to auto-install mcpserver-repl."
+    Write-Error "gh CLI not found. Install GitHub CLI to auto-install qbrain-ai-repl or mcpserver-repl."
     exit 1
 }
 
@@ -12,20 +13,35 @@ if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
     exit 1
 }
 
-$tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) "mcpserver-repl-$PID"
-New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null
+$candidates = @(
+    @{ Pattern = 'QBrainAI.Repl.*.nupkg'; PackageId = 'QBrainAI.Repl'; Command = 'qbrain-ai-repl' },
+    @{ Pattern = 'SharpNinja.McpServer.Repl.*.nupkg'; PackageId = 'SharpNinja.McpServer.Repl'; Command = 'mcpserver-repl' }
+)
 
-try {
-    gh release download --repo sharpninja/McpServer --pattern "SharpNinja.McpServer.Repl.*.nupkg" --dir $tmpDir
-    $nupkg = Get-ChildItem -Path $tmpDir -Filter "SharpNinja.McpServer.Repl.*.nupkg" | Select-Object -First 1
-    if (-not $nupkg) { Write-Error "No .nupkg found after download."; exit 1 }
+foreach ($candidate in $candidates) {
+    $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) ("qbrain-ai-repl-" + $PID + "-" + $candidate.Command)
+    New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null
+    try {
+        $previous = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        & gh release download --repo sharpninja/McpServer --pattern $candidate.Pattern --dir $tmpDir
+        $downloadExit = $LASTEXITCODE
+        $ErrorActionPreference = $previous
+        if ($downloadExit -ne 0) { continue }
 
-    dotnet tool install --global --add-source $tmpDir SharpNinja.McpServer.Repl
-    if (-not (Get-Command mcpserver-repl -ErrorAction SilentlyContinue)) {
-        Write-Error "mcpserver-repl not on PATH after install."
-        exit 1
+        $nupkg = Get-ChildItem -Path $tmpDir -Filter $candidate.Pattern | Select-Object -First 1
+        if (-not $nupkg) { continue }
+
+        & dotnet tool install --global --add-source $tmpDir $candidate.PackageId
+        if (Get-Command $candidate.Command -ErrorAction SilentlyContinue) {
+            Write-Host ($candidate.Command + " installed successfully.")
+            exit 0
+        }
     }
-    Write-Host "mcpserver-repl installed successfully."
-} finally {
-    Remove-Item -Path $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
+    finally {
+        Remove-Item -Path $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }
+
+Write-Error "qbrain-ai-repl or mcpserver-repl not on PATH after install."
+exit 1
