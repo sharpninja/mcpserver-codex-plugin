@@ -1,6 +1,6 @@
 ---
 name: Sync Logs
-description: Use when the user asks to "sync logs", "repair MCP session logs", "logging summary", or "summarize logging" to synchronize and reconcile MCP Server session logs through the plugin bridge.
+description: Use when the user asks to "sync logs", "repair MCP session logs", "logging summary", or "summarize logging" to synchronize and reconcile QBrain.AI session logs through the plugin bridge.
 version: 0.1.0
 ---
 

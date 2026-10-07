@@ -10,7 +10,7 @@ version: 0.1.0
 
 To manage workspace use cases, use the REPL client passthrough for `client.UseCases.*` (or MCP tools `usecase_*` on the Streamable HTTP / STDIO transport when that surface is active). Do not substitute raw REST when the plugin wrapper/REPL path is available.
 
-Server REST base path: `/mcpserver/usecases`. Typed client: `McpServerClient.UseCases`. Plugin-core MCP tools: `usecase_*` (for hosts that load the MCP Server plugin core).
+Server REST base path: `/mcpserver/usecases`. Typed client: `McpServerClient.UseCases`. Plugin-core MCP tools: `usecase_*` (for hosts that load the QBrain.AI plugin core).
 
 Bootstrap session log before mutations:
 

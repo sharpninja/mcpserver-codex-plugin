@@ -506,7 +506,7 @@ payload:
         lastModifiedUtc: 2026-04-09T12:00:14Z
       github/Functional-Requirements.md:
         content: |
-          # Functional Requirements (MCP Server)
+          # Functional Requirements (QBrain.AI)
         lastModifiedUtc: 2026-04-09T12:00:15Z
 ```
 

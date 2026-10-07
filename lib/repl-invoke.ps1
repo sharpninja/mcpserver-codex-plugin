@@ -312,15 +312,14 @@ function Resolve-ReplWorkspaceDirectory {
 
     # Only the PowerShell provider location is trusted for the marker check: the
     # process-wide [Environment]::CurrentDirectory can be stale in shared hosts.
+    # Prefer cwd only when the marker file exists HERE. Ancestor markers (for
+    # example a leftover home-directory AGENTS-README-FIRST.yaml) must not block
+    # MCP_WORKSPACE_PATH fallback for an unmarked cwd.
     if (-not [string]::IsNullOrWhiteSpace($providerLocation) -and
         (Test-Path -LiteralPath $providerLocation -PathType Container)) {
-        try {
-            if ((Get-Command Find-MarkerFile -ErrorAction SilentlyContinue) -and
-                (Find-MarkerFile -StartDir $providerLocation)) {
-                return (Resolve-Path -LiteralPath $providerLocation).ProviderPath
-            }
-        } catch {
-            # No marker above the current directory; consult the env fallbacks below.
+        $directMarker = Join-Path $providerLocation 'AGENTS-README-FIRST.yaml'
+        if (Test-Path -LiteralPath $directMarker -PathType Leaf) {
+            return (Resolve-Path -LiteralPath $providerLocation).ProviderPath
         }
     }
 
@@ -667,19 +666,29 @@ function Invoke-ReplRawCore {
         [Parameter(Mandatory)][string]$Method,
         [string]$ParamsYaml = ''
     )
+    # MCP_PLUGIN_REPL_RESPONSE stub for isolated plugin tests (MemoryInjection UPS):
+    # beginTurn/completeTurn persist through SubmitAsync without a live REPL binary.
+    if ($env:MCP_PLUGIN_REPL_RESPONSE) {
+        return (New-McpPluginReplResult -Success $true -Output $env:MCP_PLUGIN_REPL_RESPONSE -Error '' -ExitCode 0)
+    }
     if (-not (Assert-ReplMarkerFresh)) {
         return (New-McpPluginReplResult -Success $false -Output '' -Error 'MCP_UNTRUSTED: marker refresh failed before REPL request')
     }
 
-    $replCommand = Get-Command mcpserver-repl -ErrorAction SilentlyContinue
+    $replCommand = Get-Command qbrain-ai-repl -ErrorAction SilentlyContinue
+    if (-not $replCommand) {
+        $replCommand = Get-Command mcpserver-repl -ErrorAction SilentlyContinue
+    }
     $replExe = $null
-    if ($env:MCP_REPL_EXECUTABLE -and (Test-Path -LiteralPath $env:MCP_REPL_EXECUTABLE)) {
+    if ($env:QBRAINAI_REPL_EXECUTABLE -and (Test-Path -LiteralPath $env:QBRAINAI_REPL_EXECUTABLE)) {
+        $replExe = $env:QBRAINAI_REPL_EXECUTABLE
+    } elseif ($env:MCP_REPL_EXECUTABLE -and (Test-Path -LiteralPath $env:MCP_REPL_EXECUTABLE)) {
         $replExe = $env:MCP_REPL_EXECUTABLE
     } elseif ($replCommand) {
         $replExe = [string]$replCommand.Source
     }
     if ([string]::IsNullOrWhiteSpace($replExe)) {
-        return (New-McpPluginReplResult -Success $false -Output '' -Error 'mcpserver-repl not found on PATH')
+        return (New-McpPluginReplResult -Success $false -Output '' -Error 'qbrain-ai-repl or mcpserver-repl not found on PATH')
     }
 
     $requestId = "req-$(Get-Date -AsUTC -Format 'yyyyMMddTHHmmssZ')-$((Get-Random -Maximum 0xFFFF).ToString('x4'))"
@@ -1765,10 +1774,34 @@ function Invoke-ReplPersistTurn {
     # HV19: ordinal case-sensitive identity (PowerShell -ne is case-insensitive by default).
     if (-not [string]::IsNullOrWhiteSpace($responseSession) -and -not [string]::Equals($responseSession, [string]$meta.SessionId, [System.StringComparison]::Ordinal)) { $identityMismatch = $true }
     if (-not [string]::IsNullOrWhiteSpace($responseRequest) -and -not [string]::Equals($responseRequest, $RequestId, [System.StringComparison]::Ordinal)) { $identityMismatch = $true }
-    if (-not $persisted -or $responseDegraded -or $identityMismatch) {
+if ($identityMismatch) {
+        $unconfirmed = "Session log persistence returned mismatched identity for request '$RequestId'. FailsafePath='$failsafePath'."
+        [void](Publish-ReplSessionVerbReceipt -Receipt (New-ReplSessionVerbReceipt -Disposition rejected -Method $verbMethod -RequestId $RequestId -FailsafePath $failsafePath -Message $unconfirmed -ChildStderr $unconfirmed))
+        throw $unconfirmed
+    }
+
+    # Persisted+degraded is a valid degraded completion: keep failsafe, surface
+    # path/message to Invoke-WorkflowCompleteTurn stderr (ReplFailsafe tests).
+    if ($persisted -and $responseDegraded) {
+        $degradedMessage = [string](Get-ReplObjectValue -InputObject $details -Name 'message')
+        if ([string]::IsNullOrWhiteSpace($degradedMessage)) {
+            $degradedMessage = 'MCP Session Log persistence is degraded.'
+        }
+        $responseFailsafe = [string](Get-ReplObjectValue -InputObject $details -Name 'failsafePath')
+        if ([string]::IsNullOrWhiteSpace($responseFailsafe)) { $responseFailsafe = $failsafePath }
+        $receipt = New-ReplSessionVerbReceipt -Disposition primary -Method $verbMethod -RequestId $RequestId -FailsafePath $responseFailsafe -Message $degradedMessage
+        $receipt['degraded'] = $true
+        $receipt['persisted'] = $true
+        $receipt['failsafePath'] = $responseFailsafe
+        $receipt['message'] = $degradedMessage
+        [void](Publish-ReplSessionVerbReceipt -Receipt $receipt)
+        Set-ReplTurnCacheField -Field 'lastPersistFingerprint' -Value $fingerprint | Out-Null
+        Set-ReplTurnCacheField -Field 'persisted' -Value 'true' | Out-Null
+        return $true
+    }
+
+    if (-not $persisted) {
         $unconfirmed = "Session log persistence did not confirm a durable write for request '$RequestId'. FailsafePath='$failsafePath'."
-        if ($responseDegraded) { $unconfirmed = "Session log persistence returned contradictory persisted+degraded for request '$RequestId'. FailsafePath='$failsafePath'." }
-        if ($identityMismatch) { $unconfirmed = "Session log persistence returned mismatched identity for request '$RequestId'. FailsafePath='$failsafePath'." }
         [void](Publish-ReplSessionVerbReceipt -Receipt (New-ReplSessionVerbReceipt -Disposition rejected -Method $verbMethod -RequestId $RequestId -FailsafePath $failsafePath -Message $unconfirmed -ChildStderr $unconfirmed))
         throw $unconfirmed
     }
@@ -1992,10 +2025,17 @@ function Assert-ReplCurrentTurnFresh {
     }
 
     # TR-MCP-PLUGIN-012 AC1: session rotation rewrites current-turn.yaml sessionId
-    # to the active session. Persist still uses Get-ReplCompleteTurnPersistSessionId
-    # on the (now rebound) turn value. Fill an empty turn sessionId from active too.
-    # FR-MCP-SESSIONLIFE-002: fill only an empty turn session id. Do not rebind
-    # a cached session onto a post-restart active session.
+    # to the active session when sourceType prefixes are compatible. Persist still
+    # uses Get-ReplCompleteTurnPersistSessionId on the (now rebound) turn value.
+    # Also fill an empty turn sessionId from active.
+    # FR-MCP-SESSIONLIFE-002: do not rebind across incompatible sourceType prefixes
+    # (those are rejected above); compatible rotation MUST rebind.
+    if ($activeSessionId -and ($staleReasons -contains 'sessionId') -and $turnSessionId) {
+        if (Test-ReplSessionSourceTypeCompatible -Left $turnSessionId -Right $activeSessionId) {
+            $turnState['sessionId'] = $activeSessionId
+            $turnSessionId = $activeSessionId
+        }
+    }
     if ($activeSessionId -and -not $turnSessionId) {
         $turnState['sessionId'] = $activeSessionId
     }
