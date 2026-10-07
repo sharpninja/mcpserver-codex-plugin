@@ -1,16 +1,16 @@
 ---
 name: Triage Reporting
-description: "Use when your agent discovers an incidental bug while working on another task and should submit it to MCP Server triage without changing focus. Triggers: 'triage', '/triage', 'submit a triage report', 'report an incidental bug', 'file this bug to triage', 'triage status'."
+description: "Use when your agent discovers an incidental bug while working on another task and should submit it to QBrain.AI triage without changing focus. Triggers: 'triage', '/triage', 'submit a triage report', 'report an incidental bug', 'file this bug to triage', 'triage status'."
 version: 0.1.0
 ---
 
 # Triage Reporting
 
-Use MCP Server triage for an incidental bug discovered while doing other work. Do not use triage for the user's active requested fix, assigned TODO, or current implementation target; fix that directly or track it through the normal TODO and requirements workflow.
+Use QBrain.AI triage for an incidental bug discovered while doing other work. Do not use triage for the user's active requested fix, assigned TODO, or current implementation target; fix that directly or track it through the normal TODO and requirements workflow.
 
 Submit the report, then continue the current task. Do not expect immediate resolution, research, or TODO creation. Intake only returns the accepted queue state; background triage later groups reports, researches them, and may create a `BUG-TRIAGE-###` backlog TODO.
 
-MCP Server-related reports, including MCP Server plugin bugs, are grouped into the registered `McpServer` workspace when that workspace exists. If no `McpServer` workspace is registered, the report stays in the submitting workspace.
+QBrain.AI-related reports, including QBrain.AI plugin bugs, are grouped into the registered `McpServer` workspace when that workspace exists. If no `McpServer` workspace is registered, the report stays in the submitting workspace.
 
 ## Tools
 

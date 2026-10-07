@@ -8,6 +8,18 @@
     Keep host defaults in this file so generated wrappers stay minimal.
 #>
 
+function Sync-QBrainAiEnvironmentAliases {
+    foreach ($entry in [System.Environment]::GetEnvironmentVariables().GetEnumerator()) {
+        $name = [string]$entry.Key
+        if (-not $name.StartsWith('QBRAINAI_')) { continue }
+        $suffix = $name.Substring(9)
+        if ($suffix -eq 'UNTRUSTED') { continue }
+        Set-Item -Path "Env:MCP_$suffix" -Value ([string]$entry.Value)
+    }
+}
+
+Sync-QBrainAiEnvironmentAliases
+
 $script:PluginEnvScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 function Get-PluginCacheVersionDriftMessage {
