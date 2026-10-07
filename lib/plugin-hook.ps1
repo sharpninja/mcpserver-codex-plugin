@@ -106,11 +106,11 @@ function Get-PluginStartPath {
     if ($WorkspacePath) { return $WorkspacePath }
 
     $currentPath = (Get-Location).ProviderPath
-    if ($currentPath -and (Get-Command Find-MarkerFile -ErrorAction SilentlyContinue)) {
-        try {
-            if (Find-MarkerFile -StartDir $currentPath) { return $currentPath }
-        } catch {
-        }
+    # Prefer cwd only when the marker file exists HERE (Get-PluginStartPath).
+    # Ancestor markers (home-directory AGENTS-README-FIRST.yaml) must not bind
+    # an unmarked temp cwd and then block on that ambient marker's health check.
+    if ($currentPath -and (Test-Path -LiteralPath (Join-Path $currentPath 'AGENTS-README-FIRST.yaml') -PathType Leaf)) {
+        return $currentPath
     }
 
     if ($env:MCP_WORKSPACE_START_DIR) { return $env:MCP_WORKSPACE_START_DIR }
@@ -221,6 +221,15 @@ function Invoke-PluginRepl {
             '---'
         ) -join "`n"
         Add-Content -LiteralPath $env:MCP_PLUGIN_REPL_LOG -Value $entry
+        # Local workflow.sessionlog verbs must still run so beginTurn can create
+        # current-turn.yaml under the cache override. Only remote client.* calls
+        # are stubbed via MCP_PLUGIN_REPL_RESPONSE (MemoryInjection UPS tests).
+        if ($Method -match '^workflow\.sessionlog\.') {
+            & (Join-Path $script:ScriptDir 'repl-invoke.ps1') -Method $Method -ParamsYaml $ParamsYaml
+            $exitCodeVariable = Get-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue
+            $script:LastPluginReplExitCode = if ($null -ne $exitCodeVariable -and $null -ne $exitCodeVariable.Value) { [int]$exitCodeVariable.Value } else { 0 }
+            return
+        }
         if ($env:MCP_PLUGIN_REPL_RESPONSE) {
             Write-Output $env:MCP_PLUGIN_REPL_RESPONSE
         }
@@ -979,26 +988,11 @@ function Close-PluginTurnIfNeeded {
     }
 
     $status = Get-YamlScalar -Path $turnFile -Key 'status'
-    if ($sessionAgeStale -and $status -eq 'in_progress') {
-        $requestId = Get-YamlScalar -Path $turnFile -Key 'turnRequestId'
-        Write-PluginJson ([ordered]@{ decision = 'block'; reason = "stale cached session cannot be reused for $requestId" })
-        return
-    }
-    if ($sessionAgeStale -and (Test-Path -LiteralPath $sessionFile)) {
-        Set-YamlScalar -Path $sessionFile -Key 'lastUpdated' -Value ((Get-Date).ToUniversalTime().ToString('o'))
-    }
-
-    $status = Get-YamlScalar -Path $turnFile -Key 'status'
     if ($status -eq 'in_progress') {
-        if ($env:MCP_STOP_GATE_COMPLETE_TIMEOUT_SECONDS -and $env:MCP_STOP_GATE_FORCE_TIMEOUT -eq '1') {
-            Write-PluginJson ([ordered]@{ decision = 'block'; reason = "in_progress turn could not be auto-closed within $($env:MCP_STOP_GATE_COMPLETE_TIMEOUT_SECONDS)s" })
-            return
-        }
-
-        # TR-MCP-PLUGIN-011: no-op (do not block) for phantom/empty turns - system-event prompts
-        # (<task-notification>, <user_query>, <command-*>, <local-command-*>) or turns with no
-        # recorded work at all. There is nothing to complete under them and the server does not gate
-        # standard agents, so blocking is pure Stop-hook noise (BUG-TRIAGE-082/083).
+        # TR-MCP-PLUGIN-011: no-op (do not block) for phantom/empty turns BEFORE the
+        # session-age stale gate. System-event prompts or turns with no recorded work
+        # must never block Stop, even when session-state lacks lastUpdated
+        # (default updatedStale=true) (BUG-TRIAGE-082/083).
         $stopEdits = [int]((Get-YamlScalar -Path $turnFile -Key 'codeEdits') ?? '0')
         $stopAuditTotal = [int]((Get-YamlScalar -Path $turnFile -Key 'auditActions') ?? '0') +
                           [int]((Get-YamlScalar -Path $turnFile -Key 'auditFiles') ?? '0') +
@@ -1014,6 +1008,15 @@ function Close-PluginTurnIfNeeded {
             return
         }
 
+        if ($sessionAgeStale) {
+            $requestId = Get-YamlScalar -Path $turnFile -Key 'turnRequestId'
+            Write-PluginJson ([ordered]@{ decision = 'block'; reason = "stale cached session cannot be reused for $requestId" })
+            return
+        }
+        if ($env:MCP_STOP_GATE_COMPLETE_TIMEOUT_SECONDS -and $env:MCP_STOP_GATE_FORCE_TIMEOUT -eq '1') {
+            Write-PluginJson ([ordered]@{ decision = 'block'; reason = "in_progress turn could not be auto-closed within $($env:MCP_STOP_GATE_COMPLETE_TIMEOUT_SECONDS)s" })
+            return
+        }
         $response = 'Auto-closed by PowerShell stop gate.'
         $paramsYaml = ConvertTo-PluginParamsYaml ([ordered]@{
             response = $response
@@ -1030,6 +1033,10 @@ function Close-PluginTurnIfNeeded {
         }
     }
 
+    if ($sessionAgeStale -and (Test-Path -LiteralPath $sessionFile)) {
+        # refresh stale session timestamp after non-phantom handling
+        Set-YamlScalar -Path $sessionFile -Key 'lastUpdated' -Value ((Get-Date).ToUniversalTime().ToString('o'))
+    }
     $edits = [int]((Get-YamlScalar -Path $turnFile -Key 'codeEdits') ?? '0')
     $buildStatus = Get-YamlScalar -Path $turnFile -Key 'lastBuildStatus'
     if ($edits -gt 0 -and $buildStatus -eq 'failed') {

@@ -37,7 +37,7 @@ Describe 'Codex UserPromptSubmit required-memory injection' {
         $env:MCP_AGENT_NAME = 'Codex'
         $env:MCP_PLUGIN_REPL_LOG = Join-Path $script:TestRoot 'repl-log.txt'
         [System.IO.File]::WriteAllText($env:MCP_PLUGIN_REPL_LOG, '')
-        $env:MCP_PLUGIN_REPL_RESPONSE = "type: result`npayload:`n  result:`n    ok: true`n"
+        $env:MCP_PLUGIN_REPL_RESPONSE = "type: result`npayload:`n  result:`n    persisted: true`n    ok: true`n"
         Remove-Item -LiteralPath Env:MCP_MEMORY_REPL_RESPONSE -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath Env:MCP_MEMORY_FETCH_ERROR -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath Env:MCP_MEMORY_DESCRIPTOR_PATH -ErrorAction SilentlyContinue

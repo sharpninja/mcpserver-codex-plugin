@@ -42,6 +42,13 @@ Describe 'Official plugin PowerShell native smoke' {
     It 'session-start wrapper emits JSON without crashing when no marker is present' {
         $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ('p19-native-smoke-' + [guid]::NewGuid().ToString('N'))
         [void][System.IO.Directory]::CreateDirectory($tmp)
+        # smoke-local-marker: occupy the marker slot so Find-MarkerFile does not
+        # walk into an ambient home-directory marker and hang on its health URL.
+        [System.IO.File]::WriteAllText((Join-Path $tmp 'AGENTS-README-FIRST.yaml'), ("workspace: smoke
+workspacePath: {0}
+baseUrl: http://127.0.0.1:1/mcpserver
+apiKey: smoke
+" -f $tmp))
         $saved = @{}
         foreach ($name in @(
                 'MCP_WORKSPACE_PATH',
@@ -61,7 +68,7 @@ Describe 'Official plugin PowerShell native smoke' {
         $savedLocation = (Get-Location).Path
         try {
             Set-Location -LiteralPath $tmp
-            $output = & pwsh.exe -NoProfile -NonInteractive -File $script:SessionStart 2>&1 | ForEach-Object { $_.ToString() }
+            $output = & (Join-Path $PSHOME 'pwsh.exe') -NoProfile -NonInteractive -File $script:SessionStart 2>&1 | ForEach-Object { $_.ToString() }
             $text = ($output -join [Environment]::NewLine).Trim()
             $exit = if ($null -eq $LASTEXITCODE) { 0 } else { [int]$LASTEXITCODE }
             ($exit -lt 100) | Should -BeTrue

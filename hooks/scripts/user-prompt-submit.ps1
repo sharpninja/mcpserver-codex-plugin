@@ -16,7 +16,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$pluginRoot = (Resolve-Path -LiteralPath (Join-Path $scriptDir '..')).ProviderPath
+$pluginRoot = (Resolve-Path -LiteralPath (Join-Path $scriptDir '../..')).ProviderPath
 $env:MCP_PLUGIN_ROOT = $pluginRoot
 $env:MCP_PLUGIN_HOST = 'codex'
 
@@ -142,7 +142,7 @@ try {
 
 $mergedOutput = ($hookOutput | Out-String).TrimEnd()
 try {
-    $memoryContextScript = Join-Path $pluginRoot 'hooks\scripts\memory-context.ps1'
+    $memoryContextScript = Join-Path $scriptDir 'memory-context.ps1'
     if (Test-Path -LiteralPath $memoryContextScript -PathType Leaf) {
         . $memoryContextScript
         $mergedOutput = Add-McpRequiredMemoryToHookOutput -HookOutput $mergedOutput -PluginRoot $pluginRoot

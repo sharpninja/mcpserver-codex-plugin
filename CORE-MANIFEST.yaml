@@ -1,5 +1,5 @@
 coreVersion: 35822cd9
-syncedAtUtc: 2026-10-07T16:04:33Z
+syncedAtUtc: 2026-10-07T17:36:23Z
 files:
   lib/agent-runtime-header.ps1: 9ab9f1483e8650aaf65372ea26a5cc9c610b4a7a3c5903912017755ebbbce5d3
   lib/cache-manager.ps1: 96ffe0638c7445868bf10e338ba739bc5c8d5f5344092ab9bde1c9d6dd9e762e
@@ -11,8 +11,8 @@ files:
   lib/mcp-status.ps1: a43705c70d4d079ef78a5a19f5e1c192fd47910b781525f0beccf129df37ac52
   lib/McpPluginShim.psm1: 02a68cbdee243f12de6257473990a3d4b9b0cb6a34ab10f940f0ab2f0d207375
   lib/plugin-env.ps1: ba16101e59c136d950bd4d4d6a663b036865c890e160581bb6be0e83c82dc14f
-  lib/plugin-hook.ps1: e4cd6116198a46e3c9ded3de4d142992c03576d31a16ca234cbbba7956aa2b2b
-  lib/repl-invoke.ps1: 471f835efc43052e55c74fff33457686941e87e2906d1de8d085a6bebc430cc0
+  lib/plugin-hook.ps1: a58cd1811756f4ddda2c1393e5e35960af8ecb56b3a2c5d367c6874d3911b76a
+  lib/repl-invoke.ps1: d847c48e62a8b74e1c0378f2099e4c1a0d62a5ea3983ecf693cf4df252da638f
   lib/resolve-cache-dir.ps1: 8072032b17a95b8ac9e69c54cfca41bcb15a3a87d8494ad58825f178419de405
   lib/yaml-object-mutation.ps1: 39247da737c8696232b8dd14a96f7a69c5cf1839bede213af0e624972c15ad0a
   skills/handoff/invoke.ps1: 7f18f620474c5f5a73619e804648797afdd1ffc781128b563bdc6f93a8016b5d
