@@ -20,7 +20,7 @@ Describe 'Canonical PascalCase agent + openSession persistence' {
 
     It 'openSession persists the explicit sessionId into session-state.yaml' {
         $savedCache = $env:MCP_CACHE_DIR_OVERRIDE
-        $testRoot = Join-Path $env:TEMP ('mcp-opensession-' + [guid]::NewGuid().ToString('N'))
+        $testRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('mcp-opensession-' + [guid]::NewGuid().ToString('N'))
         [void][System.IO.Directory]::CreateDirectory($testRoot)
         $env:MCP_CACHE_DIR_OVERRIDE = $testRoot
         try {
