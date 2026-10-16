@@ -39,7 +39,7 @@ run_wrapper() {
 }
 
 # assert_valid_json <text> - prove the text parses as JSON. Prefers node
-# (always present in CI per core-guard), and is host-neutral: when node is
+# when it is installed, and is host-neutral: when node is
 # absent we fall back to a non-empty + brace-shaped check so the smoke test
 # never depends on a network or a specific parser.
 assert_valid_json() {

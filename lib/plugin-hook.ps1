@@ -38,6 +38,112 @@ $env:MCP_PLUGIN_HOST = $HostName
 . (Join-Path $script:ScriptDir 'agent-runtime-header.ps1')
 Import-McpYamlSerializer
 
+function Get-PluginHookDeadline {
+    <#
+    .SYNOPSIS
+        TR-MCP-REPL-012 AC-001 (D1, triage-report-124a374c): this hook's deadline in Unix milliseconds: the hook
+        process's start time plus the timeout the plugin's generated hooks.json registers for the hook's script,
+        less a three-second margin for writing the hook's result (measured 2026-10-14: up to 2.2 s from the
+        deadline to process exit under load). $null when hooks.json is missing or unreadable or registers no
+        timeout for the hook.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$HooksJsonPath,
+        [Parameter(Mandatory)][string]$HookName,
+        [Parameter(Mandatory)][datetime]$ProcessStartUtc
+    )
+
+    if (-not (Test-Path -LiteralPath $HooksJsonPath -PathType Leaf)) { return $null }
+    try {
+        $document = [System.IO.File]::ReadAllText($HooksJsonPath) | ConvertFrom-Json -Depth 20 -ErrorAction Stop
+    } catch {
+        return $null
+    }
+    $hooksProperty = if ($null -ne $document) { $document.PSObject.Properties['hooks'] } else { $null }
+    if (-not $hooksProperty -or $null -eq $hooksProperty.Value) { return $null }
+
+    # Property lookups through PSObject keep this safe under Set-StrictMode -Version Latest.
+    $scriptPattern = '[\\/]hooks[\\/]scripts[\\/]' + [regex]::Escape($HookName) + '\.ps1'
+    foreach ($hookEvent in $hooksProperty.Value.PSObject.Properties) {
+        foreach ($group in @($hookEvent.Value)) {
+            $groupHooks = if ($null -ne $group) { $group.PSObject.Properties['hooks'] } else { $null }
+            if (-not $groupHooks) { continue }
+            foreach ($hook in @($groupHooks.Value)) {
+                if ($null -eq $hook) { continue }
+                $command = $hook.PSObject.Properties['command']
+                $timeoutProperty = $hook.PSObject.Properties['timeout']
+                $timeout = 0
+                if ($command -and $timeoutProperty -and [string]$command.Value -match $scriptPattern -and
+                    [int]::TryParse([string]$timeoutProperty.Value, [ref]$timeout) -and $timeout -gt 0) {
+                    return ([DateTimeOffset]$ProcessStartUtc.ToUniversalTime()).ToUnixTimeMilliseconds() + ([long]$timeout * 1000) - 3000
+                }
+            }
+        }
+    }
+    return $null
+}
+
+function Test-PluginHookOwnsProcess {
+    <#
+    .SYNOPSIS
+        TR-MCP-REPL-012 AC-001 (D1; operator decision 2026-10-15 "Scope D1 to the hook process"): whether this process
+        was started for the hook, that is, one of its command-line arguments is the hook's entry script under the plugin
+        root: hooks/scripts/<HookName>.ps1, lib/<HookName>.ps1 (hosts that keep their entries in lib/), or
+        lib/plugin-hook.ps1 started directly; or names the running plugin-hook.ps1 itself (HookScriptPath), which can
+        live outside the plugin root, as the plugin core's own does. A hook script run inside a process started for
+        something else, such as a test runner, does not own that process, so no host timeout applies to it.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$PluginRoot,
+        [Parameter(Mandatory)][string]$HookName,
+        [string[]]$CommandLineArgs = [Environment]::GetCommandLineArgs(),
+        [string]$HookScriptPath
+    )
+
+    $comparison = if ($IsWindows) { [System.StringComparison]::OrdinalIgnoreCase } else { [System.StringComparison]::Ordinal }
+    $entries = @(
+        [System.IO.Path]::Combine($PluginRoot, 'hooks', 'scripts', "$HookName.ps1"),
+        [System.IO.Path]::Combine($PluginRoot, 'lib', "$HookName.ps1"),
+        [System.IO.Path]::Combine($PluginRoot, 'lib', 'plugin-hook.ps1')
+    ) + @($HookScriptPath | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) | ForEach-Object { [System.IO.Path]::GetFullPath($_) }
+    foreach ($argument in @($CommandLineArgs)) {
+        if ([string]::IsNullOrWhiteSpace($argument) -or $argument.StartsWith('-')) { continue }
+        $fullPath = $null
+        try { $fullPath = [System.IO.Path]::GetFullPath($argument) } catch { continue }
+        foreach ($entry in $entries) {
+            if ([string]::Equals($fullPath, $entry, $comparison)) { return $true }
+        }
+    }
+    return $false
+}
+
+function Register-PluginHookDeadline {
+    <#
+    .SYNOPSIS
+        TR-MCP-REPL-012 AC-001 (D1): publishes this hook's deadline in MCP_HOOK_DEADLINE_UTC_MS, measured from this
+        process's start, for repl-invoke.ps1 and the child processes the hook starts, when this process was started for
+        the hook (Test-PluginHookOwnsProcess); a hook script run inside another process publishes nothing. An earlier
+        deadline already published by an enclosing hook is kept while it is still ahead; a deadline that has passed is
+        stale and is replaced. Without a registered timeout nothing is published. The generated hook entry restores the
+        variable when it returns.
+    #>
+    param([Parameter(Mandatory)][string]$HookName, [string]$HookScriptPath)
+
+    $pluginRoot = [string]$env:MCP_PLUGIN_ROOT
+    if ([string]::IsNullOrWhiteSpace($pluginRoot)) { return }
+    if (-not (Test-PluginHookOwnsProcess -PluginRoot $pluginRoot -HookName $HookName -HookScriptPath $HookScriptPath)) { return }
+    $processStartUtc = [System.Diagnostics.Process]::GetCurrentProcess().StartTime.ToUniversalTime()
+    $deadline = Get-PluginHookDeadline -HooksJsonPath (Join-Path (Join-Path $pluginRoot 'hooks') 'hooks.json') -HookName $HookName -ProcessStartUtc $processStartUtc
+    if ($null -eq $deadline) { return }
+    $existing = 0L
+    if ([long]::TryParse([string]$env:MCP_HOOK_DEADLINE_UTC_MS, [ref]$existing) -and
+        $existing -gt [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() -and $existing -lt $deadline) { return }
+    $env:MCP_HOOK_DEADLINE_UTC_MS = [string]$deadline
+}
+
+# TR-MCP-REPL-012 AC-001 (D1): every server call this hook makes ends before the hook's registered budget runs out.
+Register-PluginHookDeadline -HookName $HookName -HookScriptPath $PSCommandPath
+
 function ConvertTo-PluginParamsYaml {
     param([Parameter(Mandatory)]$Params)
 
@@ -690,6 +796,21 @@ function Ensure-PluginMarkerFresh {
     }
 }
 
+function Test-PluginPromptIsHostEvent {
+    <#
+    .SYNOPSIS
+        TR-MCP-PLUGIN-013 AC-003 (D4, triage-report-5c7278cd): true when a UserPromptSubmit prompt is made only of host events, Claude
+        Code task notifications (<task-notification>...</task-notification>) and subagent hand-backs (<agent-message ...>...</agent-message>),
+        with nothing but whitespace around them. Such a prompt is not an operator request. Any other text, an unclosed block, or an empty
+        prompt makes it a request.
+    #>
+    param([AllowEmptyString()][string]$Prompt)
+
+    if ([string]::IsNullOrWhiteSpace($Prompt)) { return $false }
+    $rest = [regex]::Replace($Prompt, '(?s)<task-notification>.*?</task-notification>|<agent-message(?:\s[^>]*)?>.*?</agent-message>', '')
+    return ($rest.Length -lt $Prompt.Length) -and [string]::IsNullOrWhiteSpace($rest)
+}
+
 function Test-PluginPromptIsBackgroundAgent {
     <#
     .SYNOPSIS
@@ -722,38 +843,78 @@ function Test-PluginPromptIsBackgroundAgent {
     return $false
 }
 
-function Get-PluginRootTurnIsolationDecision {
+function Resolve-PluginBackgroundScope {
     <#
     .SYNOPSIS
-        FR-MCP-TRIAGEPLUGIN-001: reuse or skip-open when a background prompt would clobber the root turn.
+        TR-MCP-PLUGIN-013 AC-005 (PLAN-SESSIONTRIAGEFIX-001 D3, triage-report-061f30e9): the background scope of the host this hook runs
+        for, its key (Get-McpBackgroundScopeKey over the payload's session_id and the agentSessionId the root's session-state.yaml records)
+        and its cache folder under the root cache; $null for the root host. FR-MCP-TRIAGEPLUGIN-001: the root turn stays the root's.
     #>
     param(
-        $OpenTurn,
-        [string]$IncomingPrompt,
+        [Parameter(Mandatory)][string]$CacheDir,
         [string]$Payload
     )
 
-    if ($null -eq $OpenTurn) { return 'open-new' }
+    $sessionFile = Join-Path $CacheDir 'session-state.yaml'
+    $rootAgentSessionId = if (Test-Path -LiteralPath $sessionFile) { [string](Get-YamlScalar -Path $sessionFile -Key 'agentSessionId') } else { '' }
+    $key = Get-McpBackgroundScopeKey -PayloadSessionId (Get-HookPayloadValue -Payload $Payload -Name 'session_id') -RootAgentSessionId $rootAgentSessionId
+    if (-not $key) { return $null }
+    return [pscustomobject]@{ Key = $key; Dir = (Join-McpBackgroundScopePath -CacheDir $CacheDir -Key $key) }
+}
 
-    $status = ''
-    $requestId = ''
-    if ($OpenTurn -is [System.Collections.IDictionary]) {
-        if ($OpenTurn.Contains('status')) { $status = [string]$OpenTurn['status'] }
-        if ($OpenTurn.Contains('turnRequestId')) { $requestId = [string]$OpenTurn['turnRequestId'] }
+function Initialize-PluginBackgroundScope {
+    <#
+    .SYNOPSIS
+        TR-MCP-PLUGIN-013 AC-005 (D3): prepares a background host's cache folder for a turn in the root's session. Its session-state.yaml
+        becomes a copy of the root's (the same session, marker proof and title, so the turn lands in the root's session and never retitles
+        it) plus the scope key. Returns the root's session id and the id of the turn the root's current-turn.yaml names, open or completed.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$RootCacheDir,
+        [Parameter(Mandatory)]$Scope
+    )
+
+    [void][System.IO.Directory]::CreateDirectory($Scope.Dir)
+    $rootState = Read-McpYamlObject -Path (Join-Path $RootCacheDir 'session-state.yaml')
+    $scopeState = [ordered]@{}
+    foreach ($name in @($rootState.Keys)) { $scopeState[$name] = $rootState[$name] }
+    if (-not $scopeState.Contains('title') -or [string]::IsNullOrWhiteSpace([string]$scopeState['title'])) {
+        $scopeState['title'] = "background scope of $([string]$rootState['sessionId'])"
     }
-    if ([string]::IsNullOrWhiteSpace($requestId)) { return 'open-new' }
-    if (-not (Test-PluginPromptIsBackgroundAgent -Prompt $IncomingPrompt -Payload $Payload)) {
-        return 'open-new'
-    }
-    if ($status -eq 'in_progress') { return 'reuse' }
-    if ($status -eq 'completed') { return 'isolate-skip' }
-    return 'open-new'
+    $scopeState['backgroundScopeKey'] = [string]$Scope.Key
+    Write-McpYamlObject -Path (Join-Path $Scope.Dir 'session-state.yaml') -Document $scopeState
+    $rootTurnFile = Join-Path $RootCacheDir 'current-turn.yaml'
+    $rootTurnId = if (Test-Path -LiteralPath $rootTurnFile) { [string](Get-YamlScalar -Path $rootTurnFile -Key 'turnRequestId') } else { '' }
+    return [pscustomobject]@{ SessionId = [string]$rootState['sessionId']; RootTurnId = $rootTurnId }
 }
 
 function Open-PluginTurn {
     $startPath = Get-PluginStartPath -PreferredPath $WorkspacePath
     Set-PluginWorkspaceIdentity -ResolvedPath $startPath
     $cacheDir = Get-PluginCacheDir -StartPath $startPath
+
+    # TR-MCP-PLUGIN-013 AC-003 (D4, triage-report-5c7278cd): a task notification or subagent hand-back is not an operator request. It
+    # opens no turn and supersedes nothing, so the operator's open turn stays current; this runs before the marker refresh so an event
+    # costs no server call. Read-HookInput is memoized, so the turn path below reads the same payload.
+    $eventPrompt = Get-HookPayloadValue -Payload (Read-HookInput) -Name 'prompt'
+    if (Test-PluginPromptIsHostEvent -Prompt $eventPrompt) {
+        $currentTurnFile = Join-Path $cacheDir 'current-turn.yaml'
+        $currentRequestId = if (Test-Path -LiteralPath $currentTurnFile) { [string](Get-YamlScalar -Path $currentTurnFile -Key 'turnRequestId') } else { '' }
+        Write-PluginJson ([ordered]@{
+            hookSpecificOutput = [ordered]@{
+                hookEventName = 'UserPromptSubmit'
+                status = 'system-event'
+                turnRequestId = $currentRequestId
+                additionalContext = if ($currentRequestId) {
+                    "Host event (task notification or subagent hand-back): no session log turn was opened; turn $currentRequestId is unchanged."
+                } else {
+                    'Host event (task notification or subagent hand-back): no session log turn was opened.'
+                }
+            }
+        })
+        return
+    }
+
     $sessionFile = Join-Path $cacheDir 'session-state.yaml'
     Ensure-PluginMarkerFresh -StartPath $startPath | Out-Null
     if (Test-Path -LiteralPath $sessionFile) {
@@ -792,6 +953,20 @@ function Open-PluginTurn {
     $title = (($prompt -split "`r?`n")[0]).Trim()
     if (-not $title) { $title = 'Continuation turn' }
     if ($title.Length -gt 60) { $title = $title.Substring(0, 60) }
+
+    # TR-MCP-PLUGIN-013 AC-005 (PLAN-SESSIONTRIAGEFIX-001 D3, triage-report-061f30e9): a background or hostile-agent brief from a host whose
+    # identity differs from the root's opens and logs its own turn in the root's session, kept in its own cache folder, so the root's
+    # current-turn.yaml and turn are never reused, skipped, superseded or rewritten. A brief with the root's own identity is the root's prompt.
+    $backgroundScope = $null
+    $backgroundContext = $null
+    if (Test-PluginPromptIsBackgroundAgent -Prompt $prompt -Payload $payload) {
+        $backgroundScope = Resolve-PluginBackgroundScope -CacheDir $cacheDir -Payload $payload
+    }
+    if ($backgroundScope) {
+        $backgroundContext = Initialize-PluginBackgroundScope -RootCacheDir $cacheDir -Scope $backgroundScope
+        $cacheDir = $backgroundScope.Dir
+        $sessionFile = Join-Path $cacheDir 'session-state.yaml'
+    }
 
     # Double hook registration (plugin hooks.json plus the settings.json bridge) delivers the
     # same prompt twice per user message; reuse the turn the first delivery opened instead of
@@ -834,23 +1009,6 @@ function Open-PluginTurn {
                 return
             }
 
-            $isolation = Get-PluginRootTurnIsolationDecision -OpenTurn $openTurn -IncomingPrompt $prompt -Payload $payload
-            if ($isolation -eq 'reuse' -or $isolation -eq 'isolate-skip') {
-                Write-PluginJson ([ordered]@{
-                    hookSpecificOutput = [ordered]@{
-                        hookEventName = 'UserPromptSubmit'
-                        status = $(if ($isolation -eq 'reuse') { 'turn-already-open' } else { 'root-turn-isolated' })
-                        turnRequestId = $openRequestId
-                        isolation = $isolation
-                        additionalContext = if ($isolation -eq 'reuse') {
-                            "session log turn $openRequestId remains active. Background UserPromptSubmit did not supersede the root work turn."
-                        } else {
-                            "root session log turn $openRequestId is completed. Background UserPromptSubmit did not rewrite current-turn.yaml."
-                        }
-                    }
-                })
-                return
-            }
         }
     }
 
@@ -864,14 +1022,28 @@ function Open-PluginTurn {
 
     $turnRequestId = 'req-{0}-prompt-{1:x4}' -f (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ'), (Get-Random -Maximum 0xffff)
     $turnContext = Resolve-PluginTurnPlanContext
-    $paramsYaml = ConvertTo-PluginParamsYaml ([ordered]@{
+    $beginParams = [ordered]@{
         requestId = $turnRequestId
         queryTitle = $title
         queryText = $prompt
         planFile = $turnContext.planFile
         todoId = $turnContext.todoId
-    })
-    $beginOutput = Invoke-PluginRepl -Method 'workflow.sessionlog.beginTurn' -ParamsYaml $paramsYaml
+    }
+    if ($backgroundContext) {
+        # TR-MCP-PLUGIN-013 AC-005 (D3): the background turn's first write names its root session and root turn.
+        $rootIds = @("root session: $($backgroundContext.SessionId)")
+        if ($backgroundContext.RootTurnId) { $rootIds += "root turn: $($backgroundContext.RootTurnId)" }
+        $beginParams['contextList'] = $rootIds
+        $beginParams['tags'] = @('background-agent')
+    }
+    $paramsYaml = ConvertTo-PluginParamsYaml $beginParams
+    $priorCacheOverride = $env:MCP_CACHE_DIR_OVERRIDE
+    if ($backgroundScope) { $env:MCP_CACHE_DIR_OVERRIDE = $backgroundScope.Dir }
+    try {
+        $beginOutput = Invoke-PluginRepl -Method 'workflow.sessionlog.beginTurn' -ParamsYaml $paramsYaml
+    } finally {
+        if ($backgroundScope) { $env:MCP_CACHE_DIR_OVERRIDE = $priorCacheOverride }
+    }
     if ($script:LastPluginReplExitCode -ne 0) {
         Write-PluginJson ([ordered]@{
             hookSpecificOutput = [ordered]@{
@@ -928,6 +1100,11 @@ function Open-PluginTurn {
         turnRequestId = $turnRequestId
         additionalContext = $additionalContext
     }
+    if ($backgroundScope) {
+        $rootTurnText = if ($backgroundContext.RootTurnId) { "root turn $($backgroundContext.RootTurnId) is unchanged" } else { 'the root has no current turn' }
+        $hookOutput['backgroundScope'] = [string]$backgroundScope.Key
+        $hookOutput['additionalContext'] = "$additionalContext Background agent turn in the root session; $rootTurnText."
+    }
     if ($openStatus -eq 'turn-opened-degraded') {
         $hookOutput['recoveryArtifactPath'] = [string]$recoveryArtifactPath
     }
@@ -940,6 +1117,11 @@ function Close-PluginTurnIfNeeded {
     $startPath = Get-PluginStartPath -PreferredPath $WorkspacePath
     Set-PluginWorkspaceIdentity -ResolvedPath $startPath
     $cacheDir = Get-PluginCacheDir -StartPath $startPath
+    # TR-MCP-PLUGIN-013 AC-005 (PLAN-SESSIONTRIAGEFIX-001 D3): a background host's Stop completes its own turn, kept in its own cache
+    # folder, and never the root's.
+    $backgroundScope = Resolve-PluginBackgroundScope -CacheDir $cacheDir -Payload (Read-HookInput)
+    if ($backgroundScope -and -not (Test-Path -LiteralPath (Join-Path $backgroundScope.Dir 'current-turn.yaml'))) { $backgroundScope = $null }
+    if ($backgroundScope) { $cacheDir = $backgroundScope.Dir }
     $turnFile = Join-Path $cacheDir 'current-turn.yaml'
     if ($env:CLAUDE_STOP_HOOK_ACTIVE -eq 'true') {
         Write-PluginJson ([ordered]@{})
@@ -1009,7 +1191,8 @@ function Close-PluginTurnIfNeeded {
         $stopText = (Get-YamlScalar -Path $turnFile -Key 'queryText') ?? ''
         $stopFirstLine = @($stopTitle, $stopText) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1
         $stopIsSystemEvent = $stopFirstLine -match '^\s*<(task-notification|user_query|command-name|command-message|command-args|local-command-[a-z-]+)>'
-        if ($stopIsSystemEvent -or ($stopEdits -le 0 -and $stopAuditTotal -le 0)) {
+        # A background agent's turn is a real request (D3), so its Stop closes it even when no work was recorded in it.
+        if (-not $backgroundScope -and ($stopIsSystemEvent -or ($stopEdits -le 0 -and $stopAuditTotal -le 0))) {
             Write-PluginJson ([ordered]@{})
             return
         }
@@ -1018,7 +1201,13 @@ function Close-PluginTurnIfNeeded {
         $paramsYaml = ConvertTo-PluginParamsYaml ([ordered]@{
             response = $response
         })
-        $completeOutput = Invoke-PluginRepl -Method 'workflow.sessionlog.completeTurn' -ParamsYaml $paramsYaml
+        $priorCacheOverride = $env:MCP_CACHE_DIR_OVERRIDE
+        if ($backgroundScope) { $env:MCP_CACHE_DIR_OVERRIDE = $backgroundScope.Dir }
+        try {
+            $completeOutput = Invoke-PluginRepl -Method 'workflow.sessionlog.completeTurn' -ParamsYaml $paramsYaml
+        } finally {
+            if ($backgroundScope) { $env:MCP_CACHE_DIR_OVERRIDE = $priorCacheOverride }
+        }
         if ($script:LastPluginReplExitCode -ne 0) {
             Write-PluginJson ([ordered]@{ decision = 'block'; reason = 'workflow.sessionlog.completeTurn failed; current turn remains in_progress'; output = (($completeOutput | Out-String).Trim()) })
             return
@@ -1522,7 +1711,9 @@ switch ($HookName) {
     'session-start' { Start-PluginSession -StartPath $WorkspacePath }
     'session-end' { Invoke-CacheFlushHook }
     'pre-compact' { Invoke-CacheFlushHook }
-    'post-compact' { Start-PluginSession -StartPath $WorkspacePath }
+    # TR-MCP-PLUGIN-012 AC-003 (D2, triage-report-d9bd6fc3): PostCompact starts no session. The SessionStart hook that follows a
+    # compaction (source compact) starts the one session; a second start here minted an empty twin session at every compaction.
+    'post-compact' { Write-PluginJson ([ordered]@{}) }
     'user-prompt-submit' { Open-PluginTurn }
     'stop-gate' { Close-PluginTurnIfNeeded }
     'code-verify' { Invoke-CodeVerify }

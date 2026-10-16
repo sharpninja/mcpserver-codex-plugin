@@ -6,7 +6,7 @@ $script:OriginalFailsafeDir = $env:MCPSERVER_FAILSAFE_DIR
 
 Describe 'REPL session-log persistence bridge' {
     BeforeEach {
-        $script:TestRoot = Join-Path $env:TEMP ('mcp-repl-persistence-test-' + [guid]::NewGuid().ToString('N'))
+        $script:TestRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('mcp-repl-persistence-test-' + [guid]::NewGuid().ToString('N'))
         [void][System.IO.Directory]::CreateDirectory($script:TestRoot)
         $script:FailsafeDir = Join-Path $script:TestRoot 'failsafe-pending'
         [void][System.IO.Directory]::CreateDirectory($script:FailsafeDir)
@@ -66,6 +66,9 @@ sessionId: TestAgent-20260709T000000Z-plugin-session
         $script:LastReplPersistenceDetails.persisted | Should -BeTrue
     }
 
+    # TR-MCP-PLUGIN-012 AC2 (TEST-MCP-PLUGIN-012, amended 2026-10-15; triage-report-702082e6): the degraded mode the core accepts is an
+    # unavailable backend (a timeout or HTTP 503 backend_unavailable). Close then completes with a queued receipt naming the failsafe record
+    # it kept; an answer that claims persisted and degraded together is rejected as contradictory.
     It 'reports the core failsafe path when close completes in degraded mode' {
         . (Join-Path $PSScriptRoot '..\lib\repl-invoke.ps1')
         function Assert-ReplCurrentTurnFresh {
@@ -75,18 +78,10 @@ sessionId: TestAgent-20260709T000000Z-plugin-session
         function Invoke-ReplRaw {
             param([Parameter(Mandatory)][string]$Method, [string]$ParamsYaml = '')
             return [pscustomobject]@{
-                Success = $true
-                Output = @"
-type: result
-payload:
-  result:
-    persisted: true
-    degraded: true
-    message: MCP Session Log persistence is degraded.
-    failsafePath: C:\failsafe\turn.yaml
-"@
-                Error = ''
-                ExitCode = 0
+                Success = $false
+                Output = ''
+                Error = 'HTTP 503 backend_unavailable: MCP Session Log persistence is degraded.'
+                ExitCode = 1
             }
         }
 
@@ -101,8 +96,13 @@ payload:
         }
 
         $result | Should -BeTrue
-        $errorWriter.ToString() | Should -Match 'degraded'
-        $errorWriter.ToString() | Should -Match 'C:\\failsafe\\turn\.yaml'
+        $errorWriter.ToString() | Should -Match 'queued'
+        $errorWriter.ToString() | Should -Match 'Failsafe retained'
+        $script:LastReplPersistenceDetails.queued | Should -BeTrue
+        $failsafePath = [string]$script:LastReplPersistenceDetails.failsafePath
+        $failsafePath | Should -Not -BeNullOrEmpty
+        [System.IO.Path]::GetDirectoryName($failsafePath) | Should -Be $script:FailsafeDir
+        Test-Path -LiteralPath $failsafePath -PathType Leaf | Should -BeTrue
     }
 
     It 'retains query text and turn metadata when beginTurn is queued' {

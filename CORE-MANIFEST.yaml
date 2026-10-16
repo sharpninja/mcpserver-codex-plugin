@@ -1,19 +1,19 @@
-coreVersion: 35822cd9
-syncedAtUtc: 2026-10-02T01:14:38Z
+coreVersion: "88032108"
+syncedAtUtc: 2026-10-15T16:09:42Z
 files:
   lib/agent-runtime-header.ps1: 9ab9f1483e8650aaf65372ea26a5cc9c610b4a7a3c5903912017755ebbbce5d3
   lib/cache-manager.ps1: 96ffe0638c7445868bf10e338ba739bc5c8d5f5344092ab9bde1c9d6dd9e762e
   lib/classified-error.ps1: 70014efde9ab87431b85a86180e8e2fc36eb2f97e9c74901e7381bd2f8b4c495
-  lib/ensure-repl.ps1: 2d618985fd8fd40f184e3fe2582b475db19241a16a1c55153dae42c9ca12e894
+  lib/ensure-repl.ps1: 867fd53c1e008f4bd58240439ee89ec8d54c026324f38e184b378becc1b0d8f7
   lib/final-response.ps1: a8574560aece09b89a208b0d4cdea36314b71aed8aa4620a937704ae9134e998
   lib/Invoke-McpPlugin.ps1: 70ea9b5c1f7db3eca1036e732a5366cbfaabd3db967dfb268f6eea49e89d6160
   lib/marker-resolver.ps1: 78deb0df7e8bcc9832f3acfad7fef9eae41235f82e082f9a1a029f624a1bfb24
   lib/mcp-status.ps1: a43705c70d4d079ef78a5a19f5e1c192fd47910b781525f0beccf129df37ac52
-  lib/McpPluginShim.psm1: 02a68cbdee243f12de6257473990a3d4b9b0cb6a34ab10f940f0ab2f0d207375
+  lib/McpPluginShim.psm1: 0f8448fd48dc72b1f6d232edf30a673606b3ddef47360e04ddf60fe31e4c20b0
   lib/plugin-env.ps1: f10d87095328c10ae003aba3ad4ea8c6ed825da53a788e22d4aac8c058e2fc2b
-  lib/plugin-hook.ps1: e4cd6116198a46e3c9ded3de4d142992c03576d31a16ca234cbbba7956aa2b2b
-  lib/repl-invoke.ps1: ea5a70657d7ef4a25adae36ab1e1ab1831abad6dd2f0413033b6b273ffdc7f8b
-  lib/resolve-cache-dir.ps1: 8072032b17a95b8ac9e69c54cfca41bcb15a3a87d8494ad58825f178419de405
+  lib/plugin-hook.ps1: 6bcd13ff9db83e21f6037e33dbfe4e8c19100ae1542bb8259dd5407452d334be
+  lib/repl-invoke.ps1: e3fa6cfb76365344cf690205fb4f90375d0456a245939de7218ced88a4f389af
+  lib/resolve-cache-dir.ps1: f78e997c6190d57a674dfd8a476ddf009981d4edf337c2a87559f6acd8df900e
   lib/yaml-object-mutation.ps1: 39247da737c8696232b8dd14a96f7a69c5cf1839bede213af0e624972c15ad0a
   skills/handoff/invoke.ps1: 7f18f620474c5f5a73619e804648797afdd1ffc781128b563bdc6f93a8016b5d
   skills/handoff/SKILL.md: c475040b4924edaa57a175a73feaf88c76af491efbba193c3af541d3fe95c18e
