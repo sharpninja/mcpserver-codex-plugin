@@ -295,13 +295,10 @@ function Invoke-McpMemoryWorkflow {
     }
 
     if ($env:MCP_PLUGIN_REPL_LOG) {
-        $entry = @(
-            "method: $Method"
-            'params: |'
-            (($ParamsYaml -replace "`r`n", "`n" -replace "`r", "`n") -split "`n" | ForEach-Object { "  $_" })
-            '---'
-        ) -join "`n"
-        Add-Content -LiteralPath $env:MCP_PLUGIN_REPL_LOG -Value $entry
+        if (-not (Get-Command Write-McpReplLogEntry -ErrorAction SilentlyContinue)) {
+            . (Join-Path (Get-McpMemoryPluginRoot -PluginRoot $PluginRoot) 'lib/yaml-object-mutation.ps1')
+        }
+        Write-McpReplLogEntry -Path $env:MCP_PLUGIN_REPL_LOG -Method $Method -ParamsYaml $ParamsYaml
         if (-not [string]::IsNullOrWhiteSpace($env:MCP_MEMORY_REPL_RESPONSE)) {
             return [string]$env:MCP_MEMORY_REPL_RESPONSE
         }
@@ -371,9 +368,13 @@ function Get-McpRequiredMemoryItems {
         return @(ConvertTo-McpMemoryItems -Response ([string]$response))
     }
 
+    if (-not (Get-Command ConvertTo-McpYamlText -ErrorAction SilentlyContinue)) {
+        . (Join-Path (Get-McpMemoryPluginRoot -PluginRoot $PluginRoot) 'lib/yaml-object-mutation.ps1')
+    }
+    $listParams = ConvertTo-McpYamlText -Document ([ordered]@{ scope = 'Effective' })
     $response = Invoke-McpMemoryWorkflow `
         -Method 'workflow.memory.list' `
-        -ParamsYaml 'scope: Effective' `
+        -ParamsYaml $listParams `
         -PluginRoot $PluginRoot
     return @(ConvertTo-McpMemoryItems -Response $response)
 }
