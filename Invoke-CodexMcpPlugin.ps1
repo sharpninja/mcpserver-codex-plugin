@@ -203,7 +203,15 @@ switch ($Command) {
             Read-OptionalText -Inline $Params -HasInline:$($PSBoundParameters.ContainsKey('Params')) -Path $ParamsPath
         }
 
-        Invoke-PowerShellPluginScript -ScriptPath (Join-Path $pluginRootFull 'lib\repl-invoke.ps1') -Arguments @('-Method', $Method, '-ParamsYaml', ($paramsText ?? ''))
+        # Params travel in a file, never on the child command line (32,767-character limit on Windows).
+        . (Join-Path $pluginRootFull 'lib\repl-params-transfer.ps1')
+        $paramsTransfer = New-McpReplParamsTransfer -ParamsText ($paramsText ?? '')
+        try {
+            Invoke-PowerShellPluginScript -ScriptPath (Join-Path $pluginRootFull 'lib\repl-invoke.ps1') -Arguments (@('-Method', $Method) + @($paramsTransfer.Arguments))
+        }
+        finally {
+            Remove-McpReplParamsTransfer -Transfer $paramsTransfer
+        }
     }
     'CompleteTurn' {
         $responseText = Read-OptionalText -Inline $Response -HasInline:$($PSBoundParameters.ContainsKey('Response')) -Path $ResponsePath

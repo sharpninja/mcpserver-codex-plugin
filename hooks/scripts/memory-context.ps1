@@ -314,6 +314,7 @@ function Invoke-McpMemoryWorkflow {
 
     $root = Get-McpMemoryPluginRoot -PluginRoot $PluginRoot
     $repl = Join-Path $root 'lib/repl-invoke.ps1'
+    . (Join-Path $root 'lib/repl-params-transfer.ps1')
     if (-not (Test-Path -LiteralPath $repl -PathType Leaf)) {
         throw "repl-invoke.ps1 was not found under $root"
     }
@@ -326,13 +327,16 @@ function Invoke-McpMemoryWorkflow {
         }
     }
 
+    # Params travel in a file, never on the child command line (32,767-character limit on Windows).
+    $paramsTransfer = New-McpReplParamsTransfer -ParamsText $ParamsYaml
+    try {
     $psi = [System.Diagnostics.ProcessStartInfo]::new()
     $psi.FileName = (Get-Command pwsh -ErrorAction Stop).Source
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
     $psi.CreateNoWindow = $true
-    foreach ($argument in @('-NoLogo', '-NoProfile', '-NonInteractive', '-File', $repl, '-Method', $Method, '-ParamsYaml', $ParamsYaml)) {
+    foreach ($argument in @('-NoLogo', '-NoProfile', '-NonInteractive', '-File', $repl, '-Method', $Method) + @($paramsTransfer.Arguments)) {
         $psi.ArgumentList.Add($argument)
     }
     $process = [System.Diagnostics.Process]::Start($psi)
@@ -355,6 +359,10 @@ function Invoke-McpMemoryWorkflow {
     $stdoutText = ''
     try { $stdoutText = [string]$stdoutTask.Result } catch { }
     return $stdoutText.Trim()
+    }
+    finally {
+        Remove-McpReplParamsTransfer -Transfer $paramsTransfer
+    }
 }
 
 function Get-McpRequiredMemoryItems {
