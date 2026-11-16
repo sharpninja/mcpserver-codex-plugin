@@ -31,7 +31,6 @@ $ErrorActionPreference = 'Stop'
 $shimModule = Join-Path $PSScriptRoot 'McpPluginShim.psm1'
 Import-Module $shimModule -ErrorAction Stop
 . (Join-Path $PSScriptRoot 'yaml-object-mutation.ps1')
-. (Join-Path $PSScriptRoot 'repl-params-transfer.ps1')
 
 $script:McpPluginParamsObjectBound = $PSBoundParameters.ContainsKey('ParamsObject')
 if ($script:McpPluginParamsObjectBound -and ($PSBoundParameters.ContainsKey('Params') -or $PSBoundParameters.ContainsKey('ParamsPath'))) {
@@ -290,9 +289,17 @@ function Invoke-PluginPowerShellScript {
         try { [void]$process.WaitForExit(2000) } catch { }
         # TR-MCP-TRIAGEPLUGIN-004 / BUG-TRIAGE-120: never throw an unclassified
         # timeout. Session-log callers treat command_timeout as retryable
-        # degraded/queued and keep failsafe on disk. The envelope is a native
-        # object serialized through the YAML serializer, never handwritten text.
-        $envelope = (ConvertTo-McpPluginYaml -InputObject (New-McpPluginTimeoutEnvelope -TimeoutSeconds $boundedTimeout)).TrimEnd("`r", "`n")
+        # degraded/queued and keep failsafe on disk.
+        $envelope = @(
+            'type: error'
+            'payload:'
+            '  code: command_timeout'
+            "  message: Plugin command timed out after ${boundedTimeout}s."
+            '  retryable: true'
+            '  details:'
+            '    degraded: true'
+            '    queued: true'
+        ) -join [Environment]::NewLine
         Write-Output $envelope
         [Console]::Error.WriteLine($envelope)
         return
@@ -332,7 +339,7 @@ switch ($script:McpPluginInvocation.Command) {
         } else {
             Read-OptionalText -Inline $script:McpPluginInvocation.Params -HasInline:$($PSBoundParameters.ContainsKey('Params')) -Path $script:McpPluginInvocation.ParamsPath -AllowRedirectedInput
         }
-        # Params travel in a file, never on the child command line (32,767-character limit on Windows).
+        . (Join-Path $pluginRootFull 'lib\repl-params-transfer.ps1')
         $paramsTransfer = New-McpReplParamsTransfer -ParamsText ($paramsText ?? '')
         try {
             Invoke-PluginPowerShellScript -ScriptPath (Resolve-PluginPowerShellScript -Root $pluginRootFull -Name 'repl-invoke.ps1') -Arguments (@('-Method', $script:McpPluginInvocation.Method) + @($paramsTransfer.Arguments))

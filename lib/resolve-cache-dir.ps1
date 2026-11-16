@@ -70,9 +70,10 @@ function Join-McpWorkspaceCachePath {
 function Get-McpBackgroundScopeKey {
     <#
     .SYNOPSIS
-        TR-MCP-PLUGIN-013 AC-005 (PLAN-SESSIONTRIAGEFIX-001 D3): the identity of a background host: MCP_SUBAGENT_ID, else GROK_SUBAGENT_ID,
-        else the hook payload's session_id. None when there is none or when it equals the agentSessionId recorded for the root, because
-        then the prompt is the root host's own.
+        FR-MCP-TRIAGEPLUGIN-001 / TR-MCP-TRIAGEPLUGIN-001 / TEST-MCP-TRIAGEPLUGIN-001: returns the identity of a background host.
+    .DESCRIPTION
+        Prefers MCP_SUBAGENT_ID, then GROK_SUBAGENT_ID, then the hook payload's
+        session_id. Returns no key when the candidate matches the root agentSessionId.
     #>
     [CmdletBinding()]
     param(
@@ -94,9 +95,10 @@ function Get-McpBackgroundScopeKey {
 function Join-McpBackgroundScopePath {
     <#
     .SYNOPSIS
-        TR-MCP-PLUGIN-013 AC-005 (D3): the cache folder of one background host, <cache>/background/<key>. A key with characters other than
-        letters, digits, dot, underscore and hyphen, or longer than 96 characters, is made file-safe and suffixed with a hash of the
-        original, so two keys never share a folder.
+        FR-MCP-TRIAGEPLUGIN-001 / TR-MCP-TRIAGEPLUGIN-001 / TEST-MCP-TRIAGEPLUGIN-001: returns one background host's cache path.
+    .DESCRIPTION
+        Builds <cache>/background/<key>. Unsafe or overlong keys are normalized
+        and suffixed with a hash of the original so distinct keys remain distinct.
     #>
     [CmdletBinding()]
     param(
@@ -111,24 +113,6 @@ function Join-McpBackgroundScopePath {
         $safe = if ($safe) { "$safe-$hash" } else { $hash }
     }
     return (Join-Path (Join-Path $CacheDir 'background') $safe)
-}
-
-function Resolve-McpBackgroundScopeCacheDir {
-    <#
-    .SYNOPSIS
-        TR-MCP-PLUGIN-013 AC-005 (D3): the cache a session-log verb the agent calls itself uses. With no MCP_CACHE_DIR_OVERRIDE and with
-        MCP_SUBAGENT_ID or GROK_SUBAGENT_ID set, that agent's background folder when it holds a current-turn.yaml; otherwise CacheDir.
-        Those two are the only host identities an agent's own calls carry.
-    #>
-    [CmdletBinding()]
-    param([Parameter(Mandatory)][string]$CacheDir)
-
-    if ($env:MCP_CACHE_DIR_OVERRIDE) { return $CacheDir }
-    $key = @($env:MCP_SUBAGENT_ID, $env:GROK_SUBAGENT_ID) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1
-    if ([string]::IsNullOrWhiteSpace($key)) { return $CacheDir }
-    $scope = Join-McpBackgroundScopePath -CacheDir $CacheDir -Key $key.Trim()
-    if (Test-Path -LiteralPath (Join-Path $scope 'current-turn.yaml') -PathType Leaf) { return $scope }
-    return $CacheDir
 }
 
 function Get-McpWorkspaceFromEnvironment {

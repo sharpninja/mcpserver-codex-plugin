@@ -30,6 +30,7 @@ $script:ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 # variable a terminating error.
 $script:HookInputCached = $false
 $script:CachedHookInput = ''
+$script:ProfileReloadAdditionalContext = ''
 $env:MCP_PLUGIN_HOST = $HostName
 . (Join-Path $script:ScriptDir 'plugin-env.ps1')
 . (Join-Path $script:ScriptDir 'resolve-cache-dir.ps1')
@@ -38,6 +39,7 @@ $env:MCP_PLUGIN_HOST = $HostName
 . (Join-Path $script:ScriptDir 'plan-todo-map.ps1')
 . (Join-Path $script:ScriptDir 'repl-params-transfer.ps1')
 . (Join-Path $script:ScriptDir 'agent-runtime-header.ps1')
+. (Join-Path $script:ScriptDir 'profile-reload.ps1')
 Import-McpYamlSerializer
 
 function Get-PluginHookDeadline {
@@ -167,7 +169,45 @@ function New-PluginSessionId {
 
 function Write-PluginJson {
     param([Parameter(Mandatory)]$Value)
+
+    # FR-MCP-190: every UserPromptSubmit result can carry one pending profile
+    # reload instruction without duplicating the many session-log output paths.
+    if ($HookName -eq 'user-prompt-submit' -and
+        -not [string]::IsNullOrWhiteSpace($script:ProfileReloadAdditionalContext) -and
+        $Value -is [System.Collections.IDictionary] -and
+        $Value.Contains('hookSpecificOutput') -and
+        $Value['hookSpecificOutput'] -is [System.Collections.IDictionary]) {
+        $hookOutput = $Value['hookSpecificOutput']
+        $existing = if ($hookOutput.Contains('additionalContext')) { [string]$hookOutput['additionalContext'] } else { '' }
+        $hookOutput['additionalContext'] = if ([string]::IsNullOrWhiteSpace($existing)) {
+            $script:ProfileReloadAdditionalContext
+        } else {
+            "$existing $($script:ProfileReloadAdditionalContext)"
+        }
+        $script:ProfileReloadAdditionalContext = ''
+    }
     $Value | ConvertTo-Json -Depth 20 -Compress
+}
+
+function Write-PluginSessionStartOutput {
+    <#
+    .SYNOPSIS
+        Emits an empty status result or schema-valid SessionStart context.
+    .DESCRIPTION
+        Change log: 2026-11-14 - Added FR-MCP-190 immediate compact reload output.
+    #>
+    param([string]$AdditionalContext)
+
+    if ([string]::IsNullOrWhiteSpace($AdditionalContext)) {
+        Write-PluginJson ([ordered]@{})
+        return
+    }
+    Write-PluginJson ([ordered]@{
+        hookSpecificOutput = [ordered]@{
+            hookEventName = 'SessionStart'
+            additionalContext = $AdditionalContext
+        }
+    })
 }
 
 function Stop-PluginUnavailable {
@@ -377,7 +417,10 @@ function Invoke-PluginOpenSession {
 }
 
 function Start-PluginSession {
-    param([string]$StartPath)
+    param(
+        [string]$StartPath,
+        [string]$AdditionalContext
+    )
 
     $start = Get-PluginStartPath -PreferredPath $StartPath
     if (-not [string]::IsNullOrWhiteSpace($start)) {
@@ -412,7 +455,7 @@ function Start-PluginSession {
             $untrustedState['markerLastWriteUtc'] = $markerSnapshot.markerLastWriteUtc
         }
         Write-McpYamlObject -Path $sessionFile -Document $untrustedState
-        Write-PluginJson ([ordered]@{})
+        Write-PluginSessionStartOutput -AdditionalContext $AdditionalContext
         return
     }
 
@@ -458,7 +501,7 @@ function Start-PluginSession {
         agentExecutableVersion = [string]$agentHeaders.agentExecutableVersion
     }
     Write-McpYamlObject -Path $sessionFile -Document $sessionState
-    Write-PluginJson ([ordered]@{})
+    Write-PluginSessionStartOutput -AdditionalContext $AdditionalContext
 }
 
 function ConvertTo-PluginAgentKey {
@@ -477,6 +520,8 @@ function ConvertTo-PluginAgentKey {
         'grok' { return 'grok' }
         'grokcode' { return 'grok' }
         'grok-code' { return 'grok' }
+        'grokbot' { return 'grok' }
+        'grok-bot' { return 'grok' }
         'cline' { return 'cline' }
         'cline-v2' { return 'cline' }
         'opencode' { return 'opencode' }
@@ -849,7 +894,7 @@ function Test-PluginPromptIsBackgroundAgent {
 function Resolve-PluginBackgroundScope {
     <#
     .SYNOPSIS
-        TR-MCP-PLUGIN-013 AC-005 (PLAN-SESSIONTRIAGEFIX-001 D3, triage-report-061f30e9): the background scope of the host this hook runs
+        FR-MCP-TRIAGEPLUGIN-001 / TR-MCP-TRIAGEPLUGIN-001 / TEST-MCP-TRIAGEPLUGIN-001 (triage-report-061f30e9): the background scope of the host this hook runs
         for, its key (Get-McpBackgroundScopeKey over the payload's session_id and the agentSessionId the root's session-state.yaml records)
         and its cache folder under the root cache; $null for the root host. FR-MCP-TRIAGEPLUGIN-001: the root turn stays the root's.
     #>
@@ -868,7 +913,7 @@ function Resolve-PluginBackgroundScope {
 function Initialize-PluginBackgroundScope {
     <#
     .SYNOPSIS
-        TR-MCP-PLUGIN-013 AC-005 (D3): prepares a background host's cache folder for a turn in the root's session. Its session-state.yaml
+        FR-MCP-TRIAGEPLUGIN-001 / TR-MCP-TRIAGEPLUGIN-001 / TEST-MCP-TRIAGEPLUGIN-001: prepares a background host's cache folder for a turn in the root's session. Its session-state.yaml
         becomes a copy of the root's (the same session, marker proof and title, so the turn lands in the root's session and never retitles
         it) plus the scope key. Returns the root's session id and the id of the turn the root's current-turn.yaml names, open or completed.
     #>
@@ -895,11 +940,14 @@ function Open-PluginTurn {
     $startPath = Get-PluginStartPath -PreferredPath $WorkspacePath
     Set-PluginWorkspaceIdentity -ResolvedPath $startPath
     $cacheDir = Get-PluginCacheDir -StartPath $startPath
+    $payload = Read-HookInput
+    $profileReload = Invoke-McpProfileReloadCheck -CacheDir $cacheDir -HostName $HostName -Payload $payload
+    $script:ProfileReloadAdditionalContext = [string]$profileReload.AdditionalContext
 
     # TR-MCP-PLUGIN-013 AC-003 (D4, triage-report-5c7278cd): a task notification or subagent hand-back is not an operator request. It
     # opens no turn and supersedes nothing, so the operator's open turn stays current; this runs before the marker refresh so an event
     # costs no server call. Read-HookInput is memoized, so the turn path below reads the same payload.
-    $eventPrompt = Get-HookPayloadValue -Payload (Read-HookInput) -Name 'prompt'
+    $eventPrompt = Get-HookPayloadValue -Payload $payload -Name 'prompt'
     if (Test-PluginPromptIsHostEvent -Prompt $eventPrompt) {
         $currentTurnFile = Join-Path $cacheDir 'current-turn.yaml'
         $currentRequestId = if (Test-Path -LiteralPath $currentTurnFile) { [string](Get-YamlScalar -Path $currentTurnFile -Key 'turnRequestId') } else { '' }
@@ -950,14 +998,13 @@ function Open-PluginTurn {
         }
     }
 
-    $payload = Read-HookInput
     $prompt = Get-HookPayloadValue -Payload $payload -Name 'prompt'
     if (-not $prompt) { $prompt = 'Continuation or hook-triggered turn.' }
     $title = (($prompt -split "`r?`n")[0]).Trim()
     if (-not $title) { $title = 'Continuation turn' }
     if ($title.Length -gt 60) { $title = $title.Substring(0, 60) }
 
-    # TR-MCP-PLUGIN-013 AC-005 (PLAN-SESSIONTRIAGEFIX-001 D3, triage-report-061f30e9): a background or hostile-agent brief from a host whose
+    # FR-MCP-TRIAGEPLUGIN-001 / TR-MCP-TRIAGEPLUGIN-001 / TEST-MCP-TRIAGEPLUGIN-001 (triage-report-061f30e9): a background or hostile-agent brief from a host whose
     # identity differs from the root's opens and logs its own turn in the root's session, kept in its own cache folder, so the root's
     # current-turn.yaml and turn are never reused, skipped, superseded or rewritten. A brief with the root's own identity is the root's prompt.
     $backgroundScope = $null
@@ -1033,7 +1080,7 @@ function Open-PluginTurn {
         todoId = $turnContext.todoId
     }
     if ($backgroundContext) {
-        # TR-MCP-PLUGIN-013 AC-005 (D3): the background turn's first write names its root session and root turn.
+        # FR-MCP-TRIAGEPLUGIN-001 / TR-MCP-TRIAGEPLUGIN-001 / TEST-MCP-TRIAGEPLUGIN-001: the background turn's first write names its root session and root turn.
         $rootIds = @("root session: $($backgroundContext.SessionId)")
         if ($backgroundContext.RootTurnId) { $rootIds += "root turn: $($backgroundContext.RootTurnId)" }
         $beginParams['contextList'] = $rootIds
@@ -1117,10 +1164,12 @@ function Open-PluginTurn {
 }
 
 function Close-PluginTurnIfNeeded {
+    # 2026-11-16 FR-MCP-TRIAGEPLUGIN-001 / TR-MCP-TRIAGEPLUGIN-001 / TEST-MCP-TRIAGEPLUGIN-001:
+    # resolve background scope before selecting the turn that the stop gate evaluates.
     $startPath = Get-PluginStartPath -PreferredPath $WorkspacePath
     Set-PluginWorkspaceIdentity -ResolvedPath $startPath
     $cacheDir = Get-PluginCacheDir -StartPath $startPath
-    # TR-MCP-PLUGIN-013 AC-005 (PLAN-SESSIONTRIAGEFIX-001 D3): a background host's Stop completes its own turn, kept in its own cache
+    # FR-MCP-TRIAGEPLUGIN-001 / TR-MCP-TRIAGEPLUGIN-001 / TEST-MCP-TRIAGEPLUGIN-001: a background host's Stop completes its own turn, kept in its own cache
     # folder, and never the root's.
     $backgroundScope = Resolve-PluginBackgroundScope -CacheDir $cacheDir -Payload (Read-HookInput)
     if ($backgroundScope -and -not (Test-Path -LiteralPath (Join-Path $backgroundScope.Dir 'current-turn.yaml'))) { $backgroundScope = $null }
@@ -1674,12 +1723,27 @@ if (-not (Confirm-PowerShellMcpRuntime)) {
 }
 
 switch ($HookName) {
-    'session-start' { Start-PluginSession -StartPath $WorkspacePath }
+    'session-start' {
+        $payload = Read-HookInput
+        $additionalContext = ''
+        if (Test-McpProfileReloadCompactionPayload -Payload $payload) {
+            $startPath = Get-PluginStartPath -PreferredPath $WorkspacePath
+            $cacheDir = Get-PluginCacheDir -StartPath $startPath
+            $reload = Initialize-McpProfileReloadCompaction -CacheDir $cacheDir -HostName $HostName -InjectionAvailable -Source 'session-start-compact'
+            $additionalContext = [string]$reload.AdditionalContext
+        }
+        Start-PluginSession -StartPath $WorkspacePath -AdditionalContext $additionalContext
+    }
     'session-end' { Invoke-CacheFlushHook }
     'pre-compact' { Invoke-CacheFlushHook }
     # TR-MCP-PLUGIN-012 AC-003 (D2, triage-report-d9bd6fc3): PostCompact starts no session. The SessionStart hook that follows a
     # compaction (source compact) starts the one session; a second start here minted an empty twin session at every compaction.
-    'post-compact' { Write-PluginJson ([ordered]@{}) }
+    'post-compact' {
+        $startPath = Get-PluginStartPath -PreferredPath $WorkspacePath
+        $cacheDir = Get-PluginCacheDir -StartPath $startPath
+        $null = Initialize-McpProfileReloadCompaction -CacheDir $cacheDir -HostName $HostName -Source 'post-compact'
+        Write-PluginJson ([ordered]@{})
+    }
     'user-prompt-submit' { Open-PluginTurn }
     'stop-gate' { Close-PluginTurnIfNeeded }
     'code-verify' { Invoke-CodeVerify }

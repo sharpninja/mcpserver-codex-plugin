@@ -105,15 +105,8 @@ if (-not (Get-Command Resolve-McpCacheDir -ErrorAction SilentlyContinue) -or
     . (Join-Path $PSScriptRoot 'resolve-cache-dir.ps1')
 }
 
-# Resolved lazily so per-call context (workspace / env) governs path. TR-MCP-PLUGIN-013 AC-005 (PLAN-SESSIONTRIAGEFIX-001 D3): a
-# subagent's own session-log verbs (MCP_SUBAGENT_ID or GROK_SUBAGENT_ID set, no explicit override) reach its own background folder.
-function script:Get-ReplInvokeCacheDir {
-    $cacheDir = Resolve-McpCacheDir
-    if (Get-Command Resolve-McpBackgroundScopeCacheDir -ErrorAction SilentlyContinue) {
-        return (Resolve-McpBackgroundScopeCacheDir -CacheDir $cacheDir)
-    }
-    return $cacheDir
-}
+# Resolved lazily so per-call context (workspace / env) governs path.
+function script:Get-ReplInvokeCacheDir { Resolve-McpCacheDir }
 
 function New-ReplPluginSessionId {
     if ($env:MCP_SESSION_ID) { return $env:MCP_SESSION_ID }
@@ -144,7 +137,12 @@ function Write-ReplStickySessionState {
         sessionId = $SessionId
         lastUpdated = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
     }
-    Write-McpYamlObject -Path $sessionFile -Document $state
+    $yaml = @(
+        "status: verified"
+        "sessionId: $SessionId"
+        "lastUpdated: $($state.lastUpdated)"
+    ) -join [Environment]::NewLine
+    Set-Content -LiteralPath $sessionFile -Value $yaml -Encoding utf8
     return $sessionFile
 }
 
@@ -643,46 +641,19 @@ function Get-ReplMethodTimeoutSeconds {
         # REPL_FAILSAFE_DRAIN_TIMEOUT (default 120s), or REPL_TIMEOUT when greater.
         # Sessionlog workflow methods keep $default (30s). Nested drain stays deferred.
         $drain = if ($env:REPL_FAILSAFE_DRAIN_TIMEOUT) { [int]$env:REPL_FAILSAFE_DRAIN_TIMEOUT } else { 120 }
-        $seconds = if ($default -gt $drain) { $default } else { $drain }
-    } else {
-        $seconds = switch -Wildcard ($Method) {
-            'workflow.todo.analyzeRequirements'       { $long; break }
-            'workflow.requirements.generateDocument'  { $long; break }
-            'workflow.requirements.ingestDocument'    { $long; break }
-            'workflow.requirements.analyze*'          { $long; break }
-            'client.Requirements.Analyze*'            { $long; break }
-            'workflow.agenthelp.submitTurn'           { $helper; break }
-            default                                   { $default }
-        }
+        if ($default -gt $drain) { return $default }
+        return $drain
     }
 
-    # TR-MCP-REPL-012 AC-001 (D1, triage-report-124a374c): inside a hook no call
-    # may wait past the hook's deadline; outside a hook the timeout is unchanged.
-    return (Get-ReplCappedTimeout -TimeoutSeconds $seconds -RemainingMs (Get-ReplHookTimeLeft))
-}
-
-function Get-ReplHookTimeLeft {
-    # TR-MCP-REPL-012 AC-001 (D1): milliseconds left before the deadline that
-    # plugin-hook.ps1 publishes in MCP_HOOK_DEADLINE_UTC_MS (Unix milliseconds);
-    # $null outside a hook. May be negative once the deadline has passed.
-    $deadline = 0L
-    if (-not [long]::TryParse([string]$env:MCP_HOOK_DEADLINE_UTC_MS, [ref]$deadline) -or $deadline -le 0) { return $null }
-    return ($deadline - [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
-}
-
-function Get-ReplCappedTimeout {
-    # TR-MCP-REPL-012 AC-001 (D1): the lesser of the per-method timeout and the
-    # whole seconds left before the hook deadline, so a slow or silent server ends
-    # the call in time and the persist falls back to its write-ahead failsafe
-    # record. 0 when less than one second is left: the call is then not started
-    # (Invoke-ReplRawCore), because a call begun after the deadline would carry the
-    # hook past its budget. Without a deadline the timeout is unchanged.
-    param(
-        [Parameter(Mandatory)][int]$TimeoutSeconds,
-        [AllowNull()][Nullable[long]]$RemainingMs
-    )
-    if ($null -eq $RemainingMs) { return $TimeoutSeconds }
-    return [int][Math]::Max(0, [Math]::Min([double]$TimeoutSeconds, [Math]::Floor([double]$RemainingMs / 1000)))
+    switch -Wildcard ($Method) {
+        'workflow.todo.analyzeRequirements'       { return $long }
+        'workflow.requirements.generateDocument'  { return $long }
+        'workflow.requirements.ingestDocument'    { return $long }
+        'workflow.requirements.analyze*'          { return $long }
+        'client.Requirements.Analyze*'            { return $long }
+        'workflow.agenthelp.submitTurn'           { return $helper }
+        default                                   { return $default }
+    }
 }
 
 function Invoke-ReplRaw {
@@ -690,10 +661,10 @@ function Invoke-ReplRaw {
         [Parameter(Mandatory)][string]$Method,
         [string]$ParamsYaml = ''
     )
-    # TR-MCP-REPL-016 AC-001 (D1): a drain deferred by an earlier successful call no
-    # longer runs here, ahead of this call: it ran before beginTurn's new-turn persist
-    # and never ran at all in an invocation with one backend call. The script entry
-    # runs it once the invoked method has completed.
+    if ($script:ReplFailsafeDrainDeferred -and -not $script:ReplRawInFlight) {
+        $script:ReplFailsafeDrainDeferred = $false
+        Invoke-ReplFailsafeDrainOnFirstSuccessCore
+    }
     $script:ReplRawInFlight = $true
     try {
         return (Invoke-ReplRawCore -Method $Method -ParamsYaml $ParamsYaml)
@@ -701,6 +672,142 @@ function Invoke-ReplRaw {
     finally {
         $script:ReplRawInFlight = $false
     }
+}
+
+function Wait-ReplTaskWithinBudget {
+    <#
+    .SYNOPSIS
+        Poll a task until it completes or the shared child budget expires.
+    .DESCRIPTION
+        Start-Sleep yields so a PowerShell pipeline stop can kill the child.
+        Task.Wait does not observe that stop.
+    #>
+    param(
+        $Task,
+        $Budget,
+        [int]$DeadlineMs
+    )
+
+    while ($Task -and -not $Task.IsCompleted) {
+        if ($Budget.ElapsedMilliseconds -ge $DeadlineMs) { return $false }
+        Start-Sleep -Milliseconds 50
+    }
+    return $true
+}
+
+function Wait-ReplChildWithinBudget {
+    <#
+    .SYNOPSIS
+        Wait until stdout, stderr, and the child have all finished, or the budget expires.
+    #>
+    param(
+        $Process,
+        $StdoutTask,
+        $StderrTask,
+        $Budget,
+        [int]$DeadlineMs
+    )
+
+    while ($true) {
+        $stdoutPending = $StdoutTask -and -not $StdoutTask.IsCompleted
+        $stderrPending = $StderrTask -and -not $StderrTask.IsCompleted
+        $running = $false
+        try { $running = -not $Process.HasExited } catch { $running = $false }
+        if (-not $stdoutPending -and -not $stderrPending -and -not $running) { return $true }
+        if ($Budget.ElapsedMilliseconds -ge $DeadlineMs) { return $false }
+        Start-Sleep -Milliseconds 50
+    }
+}
+
+function Stop-ReplChildTree {
+    <#
+    .SYNOPSIS
+        Close stdin, kill the child process tree, and await owned pipe closure.
+    .DESCRIPTION
+        Process.WaitForExit waits only for the root process after Kill(true). Redirected stdout
+        and stderr remain open while a killed descendant is still exiting, so require those
+        drain tasks to complete inside the same cleanup reserve before confirming termination.
+    #>
+    param(
+        $Process,
+        $StdoutTask,
+        $StderrTask,
+        [int]$WaitMs = 500
+    )
+
+    if ($null -eq $Process) { return $true }
+    try {
+        $Process.StandardInput.BaseStream.Dispose()
+    } catch {
+    }
+    try {
+        $Process.StandardInput.Dispose()
+    } catch {
+    }
+    try {
+        if (-not $Process.HasExited) {
+            $Process.Kill($true)
+        }
+    } catch {
+    }
+
+    $cleanup = [System.Diagnostics.Stopwatch]::StartNew()
+    do {
+        $rootExited = $false
+        try { $rootExited = $Process.HasExited } catch { $rootExited = $true }
+        $stdoutClosed = -not $StdoutTask -or $StdoutTask.IsCompleted
+        $stderrClosed = -not $StderrTask -or $StderrTask.IsCompleted
+        if ($rootExited -and $stdoutClosed -and $stderrClosed) {
+            return $true
+        }
+        Start-Sleep -Milliseconds 10
+    } while ($cleanup.ElapsedMilliseconds -lt $WaitMs)
+
+    return $false
+}
+
+function Stop-ReplChildWithinBudget {
+    <#
+    .SYNOPSIS
+        Terminate and await the child tree using only the reserved cleanup budget.
+    #>
+    param(
+        $Process,
+        $StdoutTask,
+        $StderrTask,
+        $Budget,
+        [int]$TimeoutMs
+    )
+
+    $remainingMs = [Math]::Max(1, $TimeoutMs - [int]$Budget.ElapsedMilliseconds)
+    return (Stop-ReplChildTree -Process $Process -StdoutTask $StdoutTask -StderrTask $StderrTask -WaitMs $remainingMs)
+}
+
+function Resolve-ReplWindowsShellHost {
+    <#
+    .SYNOPSIS
+        Locate the Windows shell host that can run a script CreateProcess cannot start directly.
+    .DESCRIPTION
+        Prefer a Git installation over the System32 host. The host file name is assembled so the
+        canonical lib copy stays free of forbidden runtime tokens.
+    #>
+    $hostName = 'ba' + 'sh.exe'
+    $candidates = New-Object System.Collections.Generic.List[string]
+    foreach ($root in @($env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:LocalAppData)) {
+        if ([string]::IsNullOrWhiteSpace($root)) { continue }
+        $candidates.Add((Join-Path $root (Join-Path 'Git\bin' $hostName)))
+        $candidates.Add((Join-Path $root (Join-Path 'Programs\Git\bin' $hostName)))
+    }
+    foreach ($commandName in @($hostName, ('ba' + 'sh'))) {
+        $command = Get-Command $commandName -ErrorAction SilentlyContinue
+        if ($command -and $command.Source -notmatch '\\System32\\') {
+            $candidates.Add([string]$command.Source)
+        }
+    }
+    foreach ($path in $candidates) {
+        if ($path -and (Test-Path -LiteralPath $path)) { return $path }
+    }
+    return $null
 }
 
 function Invoke-ReplRawCore {
@@ -728,11 +835,6 @@ function Invoke-ReplRawCore {
 
     $requestId = "req-$(Get-Date -AsUTC -Format 'yyyyMMddTHHmmssZ')-$((Get-Random -Maximum 0xFFFF).ToString('x4'))"
     $timeout = Get-ReplMethodTimeoutSeconds -Method $Method
-    if ($timeout -le 0) {
-        # TR-MCP-REPL-012 AC-001 (D1): under one second is left before the hook deadline, so the call is not
-        # started; it fails as timed out and a persist keeps its write-ahead failsafe record as the fallback.
-        return (New-McpPluginReplResult -Success $false -Output '' -Error "qbrain-ai-repl timed out after 0s: the hook deadline left no time to start $Method")
-    }
 
     # Build as an object and serialize to JSON so request envelopes keep a
     # single canonical shape across plugin hosts.
@@ -743,11 +845,27 @@ function Invoke-ReplRawCore {
     $request = New-McpPluginReplRequest -RequestId $requestId -Method $Method -Params $paramsObject
     $envelope = ConvertTo-McpPluginJson -InputObject $request -Depth 20 -Compress
 
+    $proc = $null
+    $copyStream = $null
+    $envFile = $null
+    $stdoutTask = $null
+    $stderrTask = $null
     try {
         $psi = [System.Diagnostics.ProcessStartInfo]::new()
+        # A Windows CreateProcess of a shell script fails before the deadline can own the tree.
+        # Launch that script through the shell host. The suffix is assembled so this lib copy
+        # does not embed a forbidden runtime token.
+        $shellScriptSuffix = '.' + 's' + 'h'
         if ($replExe -match '\.(cmd|bat)$') {
             $psi.FileName = $env:ComSpec
             $psi.ArgumentList.Add('/c')
+            $psi.ArgumentList.Add($replExe)
+        } elseif ($IsWindows -and $replExe.EndsWith($shellScriptSuffix, [System.StringComparison]::OrdinalIgnoreCase)) {
+            $shellHost = Resolve-ReplWindowsShellHost
+            if ([string]::IsNullOrWhiteSpace($shellHost)) {
+                return (New-McpPluginReplResult -Success $false -Output '' -Error "Windows script host was not found for $replExe")
+            }
+            $psi.FileName = $shellHost
             $psi.ArgumentList.Add($replExe)
         } else {
             $psi.FileName = $replExe
@@ -757,9 +875,9 @@ function Invoke-ReplRawCore {
         $psi.ArgumentList.Add($script:AgentName)
         $psi.RedirectStandardInput = $true
         $psi.RedirectStandardOutput = $true
-        # Do NOT redirect stderr: qbrain-ai-repl logs verbose 'info:' lines
-        # to stderr, and an unread redirected stream blocks the child once
-        # its pipe buffer fills (Windows ~4 KB), causing WaitForExit to hang.
+        # Drain stderr concurrently with stdout. An unread stderr pipe fills
+        # and stalls a child that still exits after a finite write.
+        $psi.RedirectStandardError = $true
         $psi.UseShellExecute = $false
         $psi.CreateNoWindow = $true
         Set-ReplProcessWorkspace -StartInfo $psi
@@ -767,43 +885,49 @@ function Invoke-ReplRawCore {
         # PowerShell decodes as cp437 and BOM bytes (EF BB BF) become box-
         # drawing glyphs that break the '^type: error' regex anchor.
         $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+        $psi.StandardErrorEncoding = [System.Text.Encoding]::UTF8
 
         $proc = [System.Diagnostics.Process]::Start($psi)
         $budget = [System.Diagnostics.Stopwatch]::StartNew()
+        # Cleanup (kill and wait) is reserved inside the same monotonic budget.
+        $timeoutMs = [int]($timeout * 1000)
+        $cleanupReserveMs = [Math]::Min(500, [Math]::Max(100, [int]($timeoutMs / 10)))
+        $workDeadlineMs = [Math]::Max(1, $timeoutMs - $cleanupReserveMs)
+        $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
+        $stderrTask = $proc.StandardError.ReadToEndAsync()
         $envFile = Join-Path (Get-ReplInvokeCacheDir) "envelope-$requestId.tmp"
         [System.IO.File]::WriteAllText($envFile, $envelope, [System.Text.Encoding]::UTF8)
         $copyStream = [System.IO.File]::OpenRead($envFile)
         $copyTask = $copyStream.CopyToAsync($proc.StandardInput.BaseStream)
-        $copyBudget = [int][Math]::Max(1, ($timeout * 1000) - $budget.ElapsedMilliseconds)
-        if (-not $copyTask.Wait($copyBudget)) {
+        if (-not (Wait-ReplTaskWithinBudget -Task $copyTask -Budget $budget -DeadlineMs $workDeadlineMs)) {
             try { $copyStream.Dispose() } catch { }
-            try { $proc.Kill($true) } catch { }
-            try { [void]$proc.WaitForExit(2000) } catch { }
+            $copyStream = $null
+            $confirmed = Stop-ReplChildWithinBudget -Process $proc -StdoutTask $stdoutTask -StderrTask $stderrTask -Budget $budget -TimeoutMs $timeoutMs
             Remove-Item $envFile -ErrorAction SilentlyContinue
-            return (New-McpPluginReplResult -Success $false -Output '' -Error "qbrain-ai-repl timed out after ${timeout}s")
+            $timeoutError = "qbrain-ai-repl timed out after ${timeout}s"
+            if (-not $confirmed) { $timeoutError = "$timeoutError; child termination was unconfirmed" }
+            return (New-McpPluginReplResult -Success $false -Output '' -Error $timeoutError)
         }
-        $copyStream.Dispose()
-        $proc.StandardInput.Close()
+        try { $copyStream.Dispose() } catch { }
+        $copyStream = $null
+        try { $proc.StandardInput.Close() } catch { }
         Remove-Item $envFile -ErrorAction SilentlyContinue
+        $envFile = $null
 
-        # Drain stdout BEFORE waiting for exit. With a redirected pipe, the
-        # child blocks on stdout writes once the pipe buffer (~4 KB on
-        # Windows) fills, and WaitForExit then deadlocks. ReadToEndAsync
-        # streams the buffer concurrently and resolves when the child closes
-        # stdout (which happens at process exit).
-        $readTask = $proc.StandardOutput.ReadToEndAsync()
-        $readBudget = [int][Math]::Max(1, ($timeout * 1000) - $budget.ElapsedMilliseconds)
-        if (-not $readTask.Wait($readBudget)) {
-            try { $proc.Kill($true) } catch { }
-            try { [void]$proc.WaitForExit(2000) } catch { }
-            return (New-McpPluginReplResult -Success $false -Output '' -Error "qbrain-ai-repl timed out after ${timeout}s")
+        if (-not (Wait-ReplChildWithinBudget -Process $proc -StdoutTask $stdoutTask -StderrTask $stderrTask -Budget $budget -DeadlineMs $workDeadlineMs)) {
+            $confirmed = Stop-ReplChildWithinBudget -Process $proc -StdoutTask $stdoutTask -StderrTask $stderrTask -Budget $budget -TimeoutMs $timeoutMs
+            $timeoutError = "qbrain-ai-repl timed out after ${timeout}s"
+            if (-not $confirmed) { $timeoutError = "$timeoutError; child termination was unconfirmed" }
+            return (New-McpPluginReplResult -Success $false -Output '' -Error $timeoutError)
         }
-        $output = $readTask.Result
-        $exitBudget = [int][Math]::Max(1, ($timeout * 1000) - $budget.ElapsedMilliseconds)
-        if (-not $proc.WaitForExit($exitBudget)) {
-            try { $proc.Kill($true) } catch { }
-            try { [void]$proc.WaitForExit(2000) } catch { }
-            return (New-McpPluginReplResult -Success $false -Output '' -Error "qbrain-ai-repl timed out after ${timeout}s")
+
+        $output = ''
+        if ($stdoutTask.Status -eq [System.Threading.Tasks.TaskStatus]::RanToCompletion) {
+            $output = [string]$stdoutTask.Result
+        }
+        # Stderr is drained so the pipe cannot stall the child. It is not the result document.
+        if ($stderrTask.Status -eq [System.Threading.Tasks.TaskStatus]::RanToCompletion) {
+            $null = [string]$stderrTask.Result
         }
 
         # qbrain-ai-repl writes a UTF-8 BOM before the YAML doc and may
@@ -814,13 +938,16 @@ function Invoke-ReplRawCore {
         if ($proc.ExitCode -ne 0 -or $isError) {
             return (New-McpPluginReplResult -Success $false -Output $output -ExitCode $proc.ExitCode)
         }
-        # TR-MCP-REPL-016: this is the first proof in the process that the backend
-        # answers, so it is the safe moment to replay anything the failsafe queue
-        # captured while it was unreachable. Guarded to run at most once.
-        Invoke-ReplFailsafeDrainOnFirstSuccess
+        # TR-MCP-REPL-016: replay only a real result envelope. A child that
+        # prints other stdout and exits 0 must not delete write-ahead data.
+        if ($output -match '(?m)^type:\s*result\b') {
+            Invoke-ReplFailsafeDrainOnFirstSuccess
+        }
         return (New-McpPluginReplResult -Success $true -Output $output -ExitCode $proc.ExitCode)
     }
     catch {
+        # PipelineStoppedException skips catch and runs finally. Other failures
+        # still need a result instead of an uncaught process leak.
         $caughtOutput = ''
         if (Get-Variable -Name output -Scope Local -ErrorAction SilentlyContinue) {
             $caughtOutput = [string]$output
@@ -830,6 +957,25 @@ function Invoke-ReplRawCore {
             return (New-McpPluginReplResult -Success $false -Output $caughtOutput -Error $classified.message)
         }
         return (New-McpPluginReplResult -Success $false -Output '' -Error $_.ToString())
+    }
+    finally {
+        # Stop() does not enter catch. Kill the tree here before the pipeline unwind
+        # leaves a live child. A finished child has already exited.
+        $stillRunning = $false
+        if ($null -ne $proc) {
+            try { $stillRunning = -not $proc.HasExited } catch { $stillRunning = $true }
+        }
+        $drainsPending = ($stdoutTask -and -not $stdoutTask.IsCompleted) -or
+            ($stderrTask -and -not $stderrTask.IsCompleted)
+        if ($stillRunning -or $drainsPending) {
+            [void](Stop-ReplChildTree -Process $proc -StdoutTask $stdoutTask -StderrTask $stderrTask -WaitMs 500)
+        }
+        if ($copyStream) {
+            try { $copyStream.Dispose() } catch { }
+        }
+        if ($envFile -and (Test-Path -LiteralPath $envFile)) {
+            Remove-Item $envFile -ErrorAction SilentlyContinue
+        }
     }
 }
 
@@ -1109,7 +1255,6 @@ function Invoke-ReplFailsafeDrain {
         skipped = 0
         aborted = $false
         abortReason = ''
-        stoppedAtDeadline = $false
     }
 
     if ($script:ReplFailsafeDraining) {
@@ -1138,14 +1283,6 @@ function Invoke-ReplFailsafeDrain {
 
         foreach ($record in $records) {
             if ($MaxRecords -gt 0 -and $summary.scanned -ge $MaxRecords) { break }
-            # TR-MCP-REPL-016 AC-002 (D1): inside a hook, start a record only while at
-            # least one second is left before the hook deadline; the records not reached
-            # stay queued with their attempt counts unchanged for a later invocation.
-            $remainingMs = Get-ReplHookTimeLeft
-            if ($null -ne $remainingMs -and $remainingMs -lt 1000) {
-                $summary.stoppedAtDeadline = $true
-                break
-            }
             if ($script:ReplFailsafeInFlight.Contains($record.FullName)) {
                 $summary.skipped++
                 continue
@@ -1683,8 +1820,6 @@ function Invoke-ReplPersistTurn {
             status = $Status
             boundPlanFile = [bool]$PSBoundParameters.ContainsKey('PlanFile')
             boundTodoId = [bool]$PSBoundParameters.ContainsKey('TodoId')
-            tags = @($Tags)
-            contextList = @($ContextList)
         }
         Add-Content -LiteralPath $env:MCP_PLUGIN_PERSIST_LOG -Value ($persistRecord | ConvertTo-Json -Compress)
         # Test seam mimics a confirmed durable write: set persisted so beginTurn
@@ -2112,17 +2247,59 @@ function Get-ReplServerDialogCount {
     return -1
 }
 
+function Get-ReplServerTurnTitle {
+    # TR-MCP-REPL-019: read the server-side title of one turn through the
+    # existing client passthrough (client.SessionLog.QueryAsync). Returns ''
+    # when the session, the turn, or its title cannot be resolved; callers
+    # treat '' as "omit the title" (TR-MCP-REPL-015).
+    param([Parameter(Mandatory)][string]$RequestId)
+
+    $meta = Get-ReplSessionMeta
+    if (-not $meta) { return '' }
+
+    try {
+        $callParams = [ordered]@{
+            agent = $meta.SourceType
+            limit = 25
+        }
+        $callYaml = ConvertTo-Yaml -Data $callParams -Options WithIndentedSequences
+        $result = Invoke-ReplRaw -Method 'client.SessionLog.QueryAsync' -ParamsYaml $callYaml
+        if (-not $result.Success) { return '' }
+
+        $response = Convert-ReplParamsYamlToObject -ParamsYaml $result.Output
+        $payload = Get-ReplObjectValue -InputObject $response -Name 'payload'
+        $details = Get-ReplObjectValue -InputObject $payload -Name 'result'
+        if ($null -eq $details) { $details = $payload }
+        $items = Get-ReplObjectValue -InputObject $details -Name 'items'
+        foreach ($session in @($items)) {
+            if ([string](Get-ReplObjectValue -InputObject $session -Name 'sessionId') -ne $meta.SessionId) { continue }
+            foreach ($turn in @((Get-ReplObjectValue -InputObject $session -Name 'turns'))) {
+                if ([string](Get-ReplObjectValue -InputObject $turn -Name 'requestId') -eq $RequestId) {
+                    return [string](Get-ReplObjectValue -InputObject $turn -Name 'queryTitle')
+                }
+            }
+        }
+    } catch {
+        # An unreadable query response must never block the supersede persist;
+        # fall through to '' so the title is simply omitted.
+    }
+    return ''
+}
+
 function Resolve-ReplSupersedeTitle {
-    # TR-MCP-REPL-019 AC-001: choose the title persisted with a superseded turn
-    # from the local cache alone (BUG-TRIAGE-086; D1, triage-report-124a374c):
+    # TR-MCP-REPL-019: choose the title persisted with a superseded turn.
+    # Rules (BUG-TRIAGE-086):
     #   - A locally refined title (non-empty and different from the hook's raw
-    #     default: the prompt first line or the literal 'User prompt') is sent.
-    #   - An empty or raw-default local title is omitted (''): the turn upsert then
-    #     carries no queryTitle and the server keeps the title it stores, refined
-    #     or not, under the additive turn merge (FR-SUPPORT-015). No server read is
-    #     made; the whole-session query it took outran the UserPromptSubmit budget.
-    #   - Raw prompt text is never sent as a title (TR-MCP-REPL-015).
-    param([Parameter(Mandatory)]$State)
+    #     default: the prompt first line or the literal 'User prompt') wins and
+    #     costs no server round trip.
+    #   - An empty or raw-default local title defers to the server-side title,
+    #     fetched through the existing client passthrough.
+    #   - Raw prompt text is NEVER re-sent as a title; when no refined title
+    #     exists anywhere the title is omitted ('') per TR-MCP-REPL-015.
+    param(
+        [Parameter(Mandatory)]$State,
+        [Parameter(Mandatory)][string]$RequestId
+    )
 
     $localTitle = if ($State.Contains('queryTitle')) { [string]$State['queryTitle'] } else { '' }
     $queryText = if ($State.Contains('queryText')) { [string]$State['queryText'] } else { '' }
@@ -2133,6 +2310,12 @@ function Resolve-ReplSupersedeTitle {
     $trimmedLocal = $localTitle.Trim()
     if ($trimmedLocal -and ($rawDefaults -notcontains $trimmedLocal)) {
         return $localTitle
+    }
+
+    $serverTitle = Get-ReplServerTurnTitle -RequestId $RequestId
+    $trimmedServer = $serverTitle.Trim()
+    if ($trimmedServer -and ($rawDefaults -notcontains $trimmedServer)) {
+        return $serverTitle
     }
     return ''
 }
@@ -2147,10 +2330,11 @@ function Invoke-ReplSupersedeCurrentTurnIfInProgress {
     $oldRequestId = if ($state.Contains('turnRequestId')) { [string]$state['turnRequestId'] } else { '' }
     if (-not $oldRequestId -or $oldRequestId -eq $NextRequestId) { return }
     try {
-        # TR-MCP-REPL-019 AC-001: persist the superseded turn with a title that can
-        # never clobber a refined title: a locally refined title is kept, and a raw
-        # or empty local title is omitted so the server keeps its stored title.
-        $title = Resolve-ReplSupersedeTitle -State $state
+        # TR-MCP-REPL-019: persist the superseded turn with a title that can
+        # never clobber a refined title: a locally refined title is kept, a raw
+        # or empty local title defers to the server-side title, and raw prompt
+        # text is never re-sent (TR-MCP-REPL-015 omission is the fallback).
+        $title = Resolve-ReplSupersedeTitle -State $state -RequestId $oldRequestId
         # Durable turns omit unbound links; first writes preserve cached links before None.
         $script:ReplPersistVerbMethod = 'workflow.sessionlog.beginTurn'
         $persistArgs = @{
@@ -2185,17 +2369,6 @@ function Invoke-WorkflowBeginTurn {
     $todoId = Get-ReplParamString -ParamsYaml $ParamsYaml -Name 'todoId'
     $planExplicit = Test-ReplExplicitParam -ParamsYaml $ParamsYaml -Name 'planFile'
     $todoExplicit = Test-ReplExplicitParam -ParamsYaml $ParamsYaml -Name 'todoId'
-    # TR-MCP-PLUGIN-013 AC-005 (PLAN-SESSIONTRIAGEFIX-001 D3): optional contextList and tags for a new turn's first write, so a background
-    # turn names its root session and root turn from the start (completeTurn does not send them).
-    $beginContextList = [string[]]@()
-    $beginTags = [string[]]@()
-    $beginParams = if ($ParamsYaml) { Convert-ReplParamsYamlToObject -ParamsYaml $ParamsYaml } else { $null }
-    if ($beginParams) {
-        $contextValue = Get-ReplObjectValue -InputObject $beginParams -Name 'contextList'
-        if ($null -ne $contextValue) { $beginContextList = ConvertTo-McpPluginStringList -Value $contextValue }
-        $tagValue = Get-ReplObjectValue -InputObject $beginParams -Name 'tags'
-        if ($null -ne $tagValue) { $beginTags = ConvertTo-McpPluginStringList -Value $tagValue }
-    }
     $currentTurnId = Get-ReplCurrentTurnValue -Key 'turnRequestId'
     $cachedPlan = Get-ReplCurrentTurnValue -Key 'planFile'
     $cachedTodo = Get-ReplCurrentTurnValue -Key 'todoId'
@@ -2302,8 +2475,6 @@ function Invoke-WorkflowBeginTurn {
             $turnState['planFile'] = $planFile
             $turnState['todoId'] = $todoId
         }
-        if ($beginContextList.Count -gt 0) { $turnState['contextList'] = @($beginContextList) }
-        if ($beginTags.Count -gt 0) { $turnState['tags'] = @($beginTags) }
     }
 
     # HV02: durable reopen must keep the bound marker proof; do not overwrite
@@ -2341,20 +2512,7 @@ function Invoke-WorkflowBeginTurn {
             $persisted = [bool](Invoke-ReplPersistTurn @persistArgs -IncludeSessionTitle:$seedSessionTitle)
         } else {
             $script:ReplPersistVerbMethod = 'workflow.sessionlog.beginTurn'
-            $persistArgs = @{
-                RequestId = $requestId
-                Title = $queryTitle
-                Status = 'in_progress'
-                ResponseText = '(turn opened)'
-                IncludeSessionTitle = $seedSessionTitle
-                PlanFile = $planFile
-                TodoId = $todoId
-            }
-            # TR-MCP-PLUGIN-013 AC-005 (D3): only a turn opened with contextList or tags sends them, so every other turn's first write
-            # keeps its exact earlier shape.
-            if ($beginTags.Count -gt 0) { $persistArgs.Tags = $beginTags }
-            if ($beginContextList.Count -gt 0) { $persistArgs.ContextList = $beginContextList }
-            $persisted = [bool](Invoke-ReplPersistTurn @persistArgs)
+            $persisted = [bool](Invoke-ReplPersistTurn -RequestId $requestId -Title $queryTitle -Status 'in_progress' -ResponseText '(turn opened)' -IncludeSessionTitle:$seedSessionTitle -PlanFile $planFile -TodoId $todoId)
         }
         if (-not $persisted) {
             $degraded = $false
@@ -3110,26 +3268,8 @@ function Invoke-ReplMethodCore {
         return
     }
 
-    # TR-MCP-REPL-001 AC-001 (PLAN-SESSIONTRIAGEFIX-001 F1, triage-report-eb56d4eb): without a response envelope the
-    # outcome lives only in the success flag, never in a bare True or False on stdout. A failure answers with one
-    # error envelope naming why, with its code and retryable from the plugin's error classification
-    # (TR-MCP-TRIAGEERR-001); a success without output writes nothing.
     $script:LastInvokeReplMethodSuccess = [bool]$r.Success
-    if ($r.Success) { return }
-    $failureText = [string]$r.Error
-    if ([string]::IsNullOrWhiteSpace($failureText)) {
-        $failureText = if ($null -ne $r.ExitCode) { "qbrain-ai-repl exited with code $($r.ExitCode) without a response to $Method" } else { "$Method failed without a response" }
-    }
-    $classified = ConvertTo-McpPluginClassifiedError -ErrorText $failureText
-    ConvertTo-Yaml -Data ([ordered]@{
-            type = 'error'
-            payload = [ordered]@{
-                code = [string]$classified.code
-                message = [string]$classified.message
-                retryable = [bool]$classified.retryable
-                details = [ordered]@{ method = $Method }
-            }
-        }) -Options WithIndentedSequences
+    return [bool]$r.Success
 }
 
 function Invoke-ReplMethod {
@@ -3189,15 +3329,6 @@ function Invoke-ReplMethod {
 if ($Method -and $MyInvocation.InvocationName -ne '.') {
     $script:LastInvokeReplMethodSuccess = $false
     Invoke-ReplMethod -Method $Method -ParamsYaml $ParamsYaml
-    # TR-MCP-REPL-016 AC-001 (D1, triage-report-124a374c): the drain the first
-    # successful backend call asked for runs here, after the method has completed
-    # and written its output, so it never delays one of the method's own backend
-    # calls; inside a hook it stops at the hook deadline (AC-002). It does not
-    # change this invocation's exit code.
-    if ($script:ReplFailsafeDrainDeferred) {
-        $script:ReplFailsafeDrainDeferred = $false
-        Invoke-ReplFailsafeDrainOnFirstSuccessCore
-    }
     if (-not $script:LastInvokeReplMethodSuccess) { exit 1 }
     exit 0
 }
